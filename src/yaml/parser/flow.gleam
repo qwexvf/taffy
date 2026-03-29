@@ -3,6 +3,7 @@
 import gleam/dict.{type Dict}
 import gleam/list
 import gleam/option.{Some}
+import gleam/result
 import gleam/string
 import yaml/lexer
 import yaml/parser/helpers.{advance, current, skip_whitespace}
@@ -26,41 +27,36 @@ fn parse_flow_sequence_items(
   case current(parser) {
     Some(lexer.BracketClose) ->
       Ok(#(value.Sequence(list.reverse(acc)), advance(parser)))
-    Some(lexer.Eof) ->
+
+    Some(lexer.Eof) | option.None ->
       Error(ParseError("Unterminated flow sequence", parser.pos))
-    option.None -> Error(ParseError("Unterminated flow sequence", parser.pos))
-    // Explicit key in flow sequence starts a single-pair mapping
+
     Some(lexer.Question) -> {
-      let parser = skip_whitespace(advance(parser))
-      case parse_flow_sequence_single_pair(parser, True) {
-        Ok(#(val, parser)) -> {
-          let parser = skip_whitespace(parser)
-          case current(parser) {
-            Some(lexer.Comma) ->
-              parse_flow_sequence_items(advance(parser), [val, ..acc])
-            Some(lexer.BracketClose) ->
-              Ok(#(value.Sequence(list.reverse([val, ..acc])), advance(parser)))
-            _ -> Error(ParseError("Expected ',' or ']'", parser.pos))
-          }
-        }
-        Error(e) -> Error(e)
-      }
+      use #(val, parser) <- result.try(parse_flow_sequence_single_pair(skip_whitespace(advance(parser)), True))
+      continue_flow_sequence(val, parser, acc)
     }
+
     _ -> {
-      case parse_flow_sequence_entry(parser) {
-        Ok(#(val, parser)) -> {
-          let parser = skip_whitespace(parser)
-          case current(parser) {
-            Some(lexer.Comma) ->
-              parse_flow_sequence_items(advance(parser), [val, ..acc])
-            Some(lexer.BracketClose) ->
-              Ok(#(value.Sequence(list.reverse([val, ..acc])), advance(parser)))
-            _ -> Error(ParseError("Expected ',' or ']'", parser.pos))
-          }
-        }
-        Error(e) -> Error(e)
-      }
+      use #(val, parser) <- result.try(parse_flow_sequence_entry(parser))
+      continue_flow_sequence(val, parser, acc)
     }
+  }
+}
+
+/// Continue parsing a flow sequence after parsing an entry.
+fn continue_flow_sequence(
+  val: YamlValue,
+  parser: Parser,
+  acc: List(YamlValue),
+) -> Result(#(YamlValue, Parser), ParseError) {
+  let parser = skip_whitespace(parser)
+  case current(parser) {
+    Some(lexer.Comma) ->
+      parse_flow_sequence_items(advance(parser), [val, ..acc])
+    Some(lexer.BracketClose) ->
+      Ok(#(value.Sequence(list.reverse([val, ..acc])), advance(parser)))
+    _ ->
+      Error(ParseError("Expected ',' or ']'", parser.pos))
   }
 }
 
@@ -69,187 +65,32 @@ fn parse_flow_sequence_entry(
   parser: Parser,
 ) -> Result(#(YamlValue, Parser), ParseError) {
   case current(parser) {
-    // Nested sequence - check if it's used as a key
     Some(lexer.BracketOpen) -> {
-      case parse_flow_sequence(advance(parser)) {
-        Ok(#(seq_val, parser)) -> {
-          // Check if this sequence is a key in a single-pair mapping
-          let parser = skip_whitespace(parser)
-          case current(parser) {
-            Some(lexer.Colon) -> {
-              // This is a single-pair mapping with sequence as key
-              let key = value_to_key_string(seq_val)
-              let parser = skip_whitespace(advance(parser))
-              case parse_flow_value(parser) {
-                Ok(#(val, parser)) -> {
-                  let mapping = dict.from_list([#(key, val)])
-                  Ok(#(value.Mapping(mapping), parser))
-                }
-                Error(e) -> Error(e)
-              }
-            }
-            // Adjacent colon: [key]:value
-            Some(lexer.Plain(p)) -> {
-              case string.starts_with(p, ":") {
-                True -> {
-                  let key = value_to_key_string(seq_val)
-                  let val_str = string.drop_start(p, 1)
-                  let val = case val_str {
-                    "" -> value.Null
-                    _ -> parse_scalar(val_str)
-                  }
-                  let mapping = dict.from_list([#(key, val)])
-                  Ok(#(value.Mapping(mapping), advance(parser)))
-                }
-                False -> Ok(#(seq_val, parser))
-              }
-            }
-            _ -> Ok(#(seq_val, parser))
-          }
-        }
-        Error(e) -> Error(e)
-      }
+      use #(seq_val, parser) <- result.try(parse_flow_sequence(advance(parser)))
+      check_for_mapping_key(seq_val, parser)
     }
-    // Nested mapping - check if it's used as a key
+
     Some(lexer.BraceOpen) -> {
-      case parse_flow_mapping(advance(parser)) {
-        Ok(#(map_val, parser)) -> {
-          // Check if this mapping is a key in a single-pair mapping
-          let parser = skip_whitespace(parser)
-          case current(parser) {
-            Some(lexer.Colon) -> {
-              // This is a single-pair mapping with mapping as key
-              let key = value_to_key_string(map_val)
-              let parser = skip_whitespace(advance(parser))
-              case parse_flow_value(parser) {
-                Ok(#(val, parser)) -> {
-                  let mapping = dict.from_list([#(key, val)])
-                  Ok(#(value.Mapping(mapping), parser))
-                }
-                Error(e) -> Error(e)
-              }
-            }
-            // Adjacent colon: {key: val}:value
-            Some(lexer.Plain(p)) -> {
-              case string.starts_with(p, ":") {
-                True -> {
-                  let key = value_to_key_string(map_val)
-                  let val_str = string.drop_start(p, 1)
-                  let val = case val_str {
-                    "" -> value.Null
-                    _ -> parse_scalar(val_str)
-                  }
-                  let mapping = dict.from_list([#(key, val)])
-                  Ok(#(value.Mapping(mapping), advance(parser)))
-                }
-                False -> Ok(#(map_val, parser))
-              }
-            }
-            _ -> Ok(#(map_val, parser))
-          }
-        }
-        Error(e) -> Error(e)
-      }
+      use #(map_val, parser) <- result.try(parse_flow_mapping(advance(parser)))
+      check_for_mapping_key(map_val, parser)
     }
-    // Check for implicit single-pair mapping (key: value) or multiline plain scalar
+
     Some(lexer.Plain(s)) -> {
-      let parser = advance(parser)
-      // Collect any multiline continuation parts
-      case collect_flow_plain_scalar_parts(parser, s) {
-        #(full_scalar, parser) -> {
-          let parser = skip_whitespace(parser)
-          case current(parser) {
-            Some(lexer.Colon) -> {
-              // This is a single-pair implicit mapping
-              let parser = skip_whitespace(advance(parser))
-              case parse_flow_value(parser) {
-                Ok(#(val, parser)) -> {
-                  let mapping = dict.from_list([#(full_scalar, val)])
-                  Ok(#(value.Mapping(mapping), parser))
-                }
-                Error(e) -> Error(e)
-              }
-            }
-            _ -> Ok(#(parse_scalar(full_scalar), parser))
-          }
-        }
-      }
+      let #(full_scalar, parser) = collect_flow_plain_scalar_parts(advance(parser), s)
+      check_for_plain_mapping_key(full_scalar, parser)
     }
-    Some(lexer.SingleQuoted(s)) -> {
-      let parser = advance(parser)
-      let parser = skip_whitespace(parser)
-      case current(parser) {
-        Some(lexer.Colon) -> {
-          let parser = skip_whitespace(advance(parser))
-          case parse_flow_value(parser) {
-            Ok(#(val, parser)) -> {
-              let mapping = dict.from_list([#(s, val)])
-              Ok(#(value.Mapping(mapping), parser))
-            }
-            Error(e) -> Error(e)
-          }
-        }
-        // Adjacent colon: 'key':value
-        Some(lexer.Plain(p)) -> {
-          case string.starts_with(p, ":") {
-            True -> {
-              let val_str = string.drop_start(p, 1)
-              let val = case val_str {
-                "" -> value.Null
-                _ -> parse_scalar(val_str)
-              }
-              let mapping = dict.from_list([#(s, val)])
-              Ok(#(value.Mapping(mapping), advance(parser)))
-            }
-            False -> Ok(#(value.String(s), parser))
-          }
-        }
-        _ -> Ok(#(value.String(s), parser))
-      }
-    }
-    Some(lexer.DoubleQuoted(s)) -> {
-      let parser = advance(parser)
-      let parser = skip_whitespace(parser)
-      case current(parser) {
-        Some(lexer.Colon) -> {
-          let parser = skip_whitespace(advance(parser))
-          case parse_flow_value(parser) {
-            Ok(#(val, parser)) -> {
-              let mapping = dict.from_list([#(s, val)])
-              Ok(#(value.Mapping(mapping), parser))
-            }
-            Error(e) -> Error(e)
-          }
-        }
-        // Adjacent colon: "key":value
-        Some(lexer.Plain(p)) -> {
-          case string.starts_with(p, ":") {
-            True -> {
-              let val_str = string.drop_start(p, 1)
-              let val = case val_str {
-                "" -> value.Null
-                _ -> parse_scalar(val_str)
-              }
-              let mapping = dict.from_list([#(s, val)])
-              Ok(#(value.Mapping(mapping), advance(parser)))
-            }
-            False -> Ok(#(value.String(s), parser))
-          }
-        }
-        _ -> Ok(#(value.String(s), parser))
-      }
-    }
+
+    Some(lexer.SingleQuoted(s)) ->
+      check_for_quoted_mapping_key(s, advance(parser) |> skip_whitespace)
+
+    Some(lexer.DoubleQuoted(s)) ->
+      check_for_quoted_mapping_key(s, advance(parser) |> skip_whitespace)
     Some(lexer.Anchor(name)) -> {
-      let parser = advance(parser) |> skip_whitespace
-      case parse_flow_sequence_entry(parser) {
-        Ok(#(val, parser)) -> {
-          let parser =
-            Parser(..parser, anchors: dict.insert(parser.anchors, name, val))
-          Ok(#(val, parser))
-        }
-        Error(e) -> Error(e)
-      }
+      use #(val, parser) <- result.try(parse_flow_sequence_entry(advance(parser) |> skip_whitespace))
+      let parser = Parser(..parser, anchors: dict.insert(parser.anchors, name, val))
+      Ok(#(val, parser))
     }
+
     Some(lexer.Alias(name)) -> {
       let parser = advance(parser)
       case dict.get(parser.anchors, name) {
@@ -257,25 +98,111 @@ fn parse_flow_sequence_entry(
         Error(_) -> Error(ParseError("Unknown anchor: " <> name, parser.pos))
       }
     }
-    Some(lexer.Tag(_)) -> {
-      let parser = advance(parser) |> skip_whitespace
-      parse_flow_sequence_entry(parser)
-    }
-    // Empty key followed by value - single-pair implicit mapping like [: b]
+
+    Some(lexer.Tag(_)) ->
+      parse_flow_sequence_entry(advance(parser) |> skip_whitespace)
+
     Some(lexer.Colon) -> {
-      let parser = skip_whitespace(advance(parser))
-      case parse_flow_value(parser) {
-        Ok(#(val, parser)) -> {
-          let mapping = dict.from_list([#("", val)])
-          Ok(#(value.Mapping(mapping), parser))
+      use #(val, parser) <- result.try(parse_flow_value(skip_whitespace(advance(parser))))
+      Ok(#(value.Mapping(dict.from_list([#("", val)])), parser))
+    }
+
+    Some(lexer.Comma) | Some(lexer.BracketClose) | _ -> Ok(#(value.Null, parser))
+  }
+}
+
+/// Check if a value is used as a mapping key (followed by colon).
+fn check_for_mapping_key(
+  val: YamlValue,
+  parser: Parser,
+) -> Result(#(YamlValue, Parser), ParseError) {
+  let parser = skip_whitespace(parser)
+  case current(parser) {
+    Some(lexer.Colon) -> {
+      let key = value_to_key_string(val)
+      use #(map_val, parser) <- result.try(parse_flow_value(skip_whitespace(advance(parser))))
+      Ok(#(value.Mapping(dict.from_list([#(key, map_val)])), parser))
+    }
+    Some(lexer.Plain(p)) ->
+      check_adjacent_colon(val, p, parser)
+    _ ->
+      Ok(#(val, parser))
+  }
+}
+
+/// Check for adjacent colon pattern (no space between value and colon).
+fn check_adjacent_colon(
+  key_val: YamlValue,
+  plain: String,
+  parser: Parser,
+) -> Result(#(YamlValue, Parser), ParseError) {
+  case string.starts_with(plain, ":") {
+    True -> {
+      let key = value_to_key_string(key_val)
+      let val = parse_adjacent_value(string.drop_start(plain, 1))
+      Ok(#(value.Mapping(dict.from_list([#(key, val)])), advance(parser)))
+    }
+    False -> Ok(#(key_val, parser))
+  }
+}
+
+/// Parse value from adjacent colon pattern.
+fn parse_adjacent_value(val_str: String) -> YamlValue {
+  case val_str {
+    "" -> value.Null
+    _ -> parse_scalar(val_str)
+  }
+}
+
+/// Check if a plain scalar is used as a mapping key.
+fn check_for_plain_mapping_key(
+  full_scalar: String,
+  parser: Parser,
+) -> Result(#(YamlValue, Parser), ParseError) {
+  let parser = skip_whitespace(parser)
+  case current(parser) {
+    Some(lexer.Colon) -> {
+      use #(val, parser) <- result.try(parse_flow_value(skip_whitespace(advance(parser))))
+      Ok(#(value.Mapping(dict.from_list([#(full_scalar, val)])), parser))
+    }
+    _ -> Ok(#(parse_scalar(full_scalar), parser))
+  }
+}
+
+/// Check if a quoted string is used as a mapping key.
+fn check_for_quoted_mapping_key(
+  s: String,
+  parser: Parser,
+) -> Result(#(YamlValue, Parser), ParseError) {
+  case current(parser) {
+    Some(lexer.Colon) -> {
+      use #(val, parser) <- result.try(parse_flow_value(skip_whitespace(advance(parser))))
+      Ok(#(value.Mapping(dict.from_list([#(s, val)])), parser))
+    }
+    Some(lexer.Plain(p)) -> {
+      case string.starts_with(p, ":") {
+        True -> {
+          let val = parse_adjacent_value(string.drop_start(p, 1))
+          Ok(#(value.Mapping(dict.from_list([#(s, val)])), advance(parser)))
         }
-        Error(e) -> Error(e)
+        False -> Ok(#(value.String(s), parser))
       }
     }
-    // Empty entry (null)
-    Some(lexer.Comma) -> Ok(#(value.Null, parser))
-    Some(lexer.BracketClose) -> Ok(#(value.Null, parser))
-    _ -> Ok(#(value.Null, parser))
+    _ -> Ok(#(value.String(s), parser))
+  }
+}
+
+/// Parse the value part of an explicit key-value pair.
+fn parse_explicit_key_value(
+  key: String,
+  parser: Parser,
+) -> Result(#(YamlValue, Parser), ParseError) {
+  case current(parser) {
+    Some(lexer.Colon) -> {
+      use #(val, parser) <- result.try(parse_flow_value(skip_whitespace(advance(parser))))
+      Ok(#(value.Mapping(dict.from_list([#(key, val)])), parser))
+    }
+    _ -> Ok(#(value.Mapping(dict.from_list([#(key, value.Null)])), parser))
   }
 }
 
@@ -284,60 +211,18 @@ fn parse_flow_sequence_single_pair(
   parser: Parser,
   _saw_question: Bool,
 ) -> Result(#(YamlValue, Parser), ParseError) {
-  // Parse the key (may be multiline in flow context)
   case current(parser) {
     Some(lexer.Plain(s)) -> {
-      let parser = advance(parser)
-      // Collect multiline continuation parts
-      let #(full_key, parser) = collect_flow_plain_scalar_parts(parser, s)
-      let parser = skip_whitespace(parser)
-      case current(parser) {
-        Some(lexer.Colon) -> {
-          let parser = skip_whitespace(advance(parser))
-          case parse_flow_value(parser) {
-            Ok(#(val, parser)) -> {
-              let mapping = dict.from_list([#(full_key, val)])
-              Ok(#(value.Mapping(mapping), parser))
-            }
-            Error(e) -> Error(e)
-          }
-        }
-        _ -> {
-          // Key with no value
-          let mapping = dict.from_list([#(full_key, value.Null)])
-          Ok(#(value.Mapping(mapping), parser))
-        }
-      }
+      let #(full_key, parser) = collect_flow_plain_scalar_parts(advance(parser), s)
+      parse_explicit_key_value(full_key, skip_whitespace(parser))
     }
-    Some(lexer.SingleQuoted(s)) | Some(lexer.DoubleQuoted(s)) -> {
-      let parser = skip_whitespace(advance(parser))
-      case current(parser) {
-        Some(lexer.Colon) -> {
-          let parser = skip_whitespace(advance(parser))
-          case parse_flow_value(parser) {
-            Ok(#(val, parser)) -> {
-              let mapping = dict.from_list([#(s, val)])
-              Ok(#(value.Mapping(mapping), parser))
-            }
-            Error(e) -> Error(e)
-          }
-        }
-        _ -> {
-          let mapping = dict.from_list([#(s, value.Null)])
-          Ok(#(value.Mapping(mapping), parser))
-        }
-      }
-    }
-    // Colon immediately (empty key)
+
+    Some(lexer.SingleQuoted(s)) | Some(lexer.DoubleQuoted(s)) ->
+      parse_explicit_key_value(s, skip_whitespace(advance(parser)))
+
     Some(lexer.Colon) -> {
-      let parser = skip_whitespace(advance(parser))
-      case parse_flow_value(parser) {
-        Ok(#(val, parser)) -> {
-          let mapping = dict.from_list([#("", val)])
-          Ok(#(value.Mapping(mapping), parser))
-        }
-        Error(e) -> Error(e)
-      }
+      use #(val, parser) <- result.try(parse_flow_value(skip_whitespace(advance(parser))))
+      Ok(#(value.Mapping(dict.from_list([#("", val)])), parser))
     }
     // No key or colon - empty mapping with empty key
     _ -> {
@@ -362,155 +247,114 @@ fn parse_flow_mapping_pairs(
 
   case current(parser) {
     Some(lexer.BraceClose) -> Ok(#(value.Mapping(acc), advance(parser)))
-    Some(lexer.Eof) ->
+
+    Some(lexer.Eof) | option.None ->
       Error(ParseError("Unterminated flow mapping", parser.pos))
-    option.None -> Error(ParseError("Unterminated flow mapping", parser.pos))
-    // Explicit key in flow mapping
-    Some(lexer.Question) -> {
-      let parser = skip_whitespace(advance(parser))
-      // Check for empty explicit key followed immediately by end or comma
-      case current(parser) {
-        Some(lexer.BraceClose) -> {
-          // ?} - empty key with null value
-          let acc = dict.insert(acc, "", value.Null)
-          Ok(#(value.Mapping(acc), advance(parser)))
-        }
-        Some(lexer.Comma) -> {
-          // ?, - empty key with null value
-          let acc = dict.insert(acc, "", value.Null)
-          parse_flow_mapping_pairs(advance(parser), acc)
-        }
-        Some(lexer.Colon) -> {
-          // ?: - empty explicit key, parse the value
-          let parser = skip_whitespace(advance(parser))
-          case parse_flow_value(parser) {
-            Ok(#(val, parser)) -> {
-              let acc = dict.insert(acc, "", val)
-              let parser = skip_whitespace(parser)
-              case current(parser) {
-                Some(lexer.Comma) ->
-                  parse_flow_mapping_pairs(advance(parser), acc)
-                Some(lexer.BraceClose) ->
-                  Ok(#(value.Mapping(acc), advance(parser)))
-                _ -> Error(ParseError("Expected ',' or '}'", parser.pos))
-              }
-            }
-            Error(e) -> Error(e)
-          }
-        }
-        _ -> {
-          case parse_flow_key_with_colon(parser) {
-            Ok(#(key, parser)) -> {
-              let parser = skip_whitespace(parser)
-              case current(parser) {
-                Some(lexer.Colon) -> {
-                  let parser = skip_whitespace(advance(parser))
-                  case parse_flow_value(parser) {
-                    Ok(#(val, parser)) -> {
-                      let acc = dict.insert(acc, key, val)
-                      let parser = skip_whitespace(parser)
-                      case current(parser) {
-                        Some(lexer.Comma) ->
-                          parse_flow_mapping_pairs(advance(parser), acc)
-                        Some(lexer.BraceClose) ->
-                          Ok(#(value.Mapping(acc), advance(parser)))
-                        _ -> Error(ParseError("Expected ',' or '}'", parser.pos))
-                      }
-                    }
-                    Error(e) -> Error(e)
-                  }
-                }
-                // Key with no value
-                Some(lexer.Comma) -> {
-                  let acc = dict.insert(acc, key, value.Null)
-                  parse_flow_mapping_pairs(advance(parser), acc)
-                }
-                Some(lexer.BraceClose) -> {
-                  let acc = dict.insert(acc, key, value.Null)
-                  Ok(#(value.Mapping(acc), advance(parser)))
-                }
-                _ -> Error(ParseError("Expected ':', ',' or '}'", parser.pos))
-              }
-            }
-            Error(e) -> Error(e)
-          }
-        }
-      }
-    }
+
+    Some(lexer.Question) ->
+      parse_explicit_flow_mapping_pair(skip_whitespace(advance(parser)), acc)
+
     _ -> {
-      case parse_flow_key_with_colon(parser) {
-        Ok(#(key, parser)) -> {
-          let parser = skip_whitespace(parser)
-          case current(parser) {
-            // Handle adjacent colon: "key":value becomes key="key", and
-            // we have Plain(":value") as the next token
-            Some(lexer.Plain(s)) -> {
-              case string.starts_with(s, ":") {
-                True -> {
-                  // Extract value after the colon
-                  let val_str = string.drop_start(s, 1)
-                  let val = case val_str {
-                    "" -> value.Null
-                    _ -> parse_scalar(val_str)
-                  }
-                  let acc = dict.insert(acc, key, val)
-                  let parser = skip_whitespace(advance(parser))
-                  case current(parser) {
-                    Some(lexer.Comma) ->
-                      parse_flow_mapping_pairs(advance(parser), acc)
-                    Some(lexer.BraceClose) ->
-                      Ok(#(value.Mapping(acc), advance(parser)))
-                    _ -> Error(ParseError("Expected ',' or '}'", parser.pos))
-                  }
-                }
-                False -> Error(ParseError("Expected ':', ',' or '}'", parser.pos))
-              }
-            }
-            Some(lexer.Colon) -> {
-              let parser = skip_whitespace(advance(parser))
-              // Check for empty value (comma or close brace immediately after colon)
-              case current(parser) {
-                Some(lexer.Comma) -> {
-                  let acc = dict.insert(acc, key, value.Null)
-                  parse_flow_mapping_pairs(advance(parser), acc)
-                }
-                Some(lexer.BraceClose) -> {
-                  let acc = dict.insert(acc, key, value.Null)
-                  Ok(#(value.Mapping(acc), advance(parser)))
-                }
-                _ -> {
-                  case parse_flow_value(parser) {
-                    Ok(#(val, parser)) -> {
-                      let acc = dict.insert(acc, key, val)
-                      let parser = skip_whitespace(parser)
-                      case current(parser) {
-                        Some(lexer.Comma) ->
-                          parse_flow_mapping_pairs(advance(parser), acc)
-                        Some(lexer.BraceClose) ->
-                          Ok(#(value.Mapping(acc), advance(parser)))
-                        _ -> Error(ParseError("Expected ',' or '}'", parser.pos))
-                      }
-                    }
-                    Error(e) -> Error(e)
-                  }
-                }
-              }
-            }
-            // Key with no colon (implicit null value) - like "http://foo.com,"
-            Some(lexer.Comma) -> {
-              let acc = dict.insert(acc, key, value.Null)
-              parse_flow_mapping_pairs(advance(parser), acc)
-            }
-            Some(lexer.BraceClose) -> {
-              let acc = dict.insert(acc, key, value.Null)
-              Ok(#(value.Mapping(acc), advance(parser)))
-            }
-            _ -> Error(ParseError("Expected ':', ',' or '}'", parser.pos))
-          }
-        }
-        Error(e) -> Error(e)
+      use #(key, parser) <- result.try(parse_flow_key_with_colon(parser))
+      parse_flow_mapping_value(key, skip_whitespace(parser), acc)
+    }
+  }
+}
+
+/// Parse an explicit key-value pair in a flow mapping (after ?).
+fn parse_explicit_flow_mapping_pair(
+  parser: Parser,
+  acc: Dict(String, YamlValue),
+) -> Result(#(YamlValue, Parser), ParseError) {
+  case current(parser) {
+    Some(lexer.BraceClose) ->
+      Ok(#(value.Mapping(dict.insert(acc, "", value.Null)), advance(parser)))
+
+    Some(lexer.Comma) ->
+      parse_flow_mapping_pairs(advance(parser), dict.insert(acc, "", value.Null))
+
+    Some(lexer.Colon) ->
+      parse_flow_mapping_colon_value("", skip_whitespace(advance(parser)), acc)
+
+    _ -> {
+      use #(key, parser) <- result.try(parse_flow_key_with_colon(parser))
+      let parser = skip_whitespace(parser)
+      case current(parser) {
+        Some(lexer.Colon) ->
+          parse_flow_mapping_colon_value(key, skip_whitespace(advance(parser)), acc)
+        Some(lexer.Comma) ->
+          parse_flow_mapping_pairs(advance(parser), dict.insert(acc, key, value.Null))
+        Some(lexer.BraceClose) ->
+          Ok(#(value.Mapping(dict.insert(acc, key, value.Null)), advance(parser)))
+        _ -> Error(ParseError("Expected ':', ',' or '}'", parser.pos))
       }
     }
+  }
+}
+
+/// Parse the value part of a flow mapping pair after seeing colon.
+fn parse_flow_mapping_colon_value(
+  key: String,
+  parser: Parser,
+  acc: Dict(String, YamlValue),
+) -> Result(#(YamlValue, Parser), ParseError) {
+  case current(parser) {
+    Some(lexer.Comma) ->
+      parse_flow_mapping_pairs(advance(parser), dict.insert(acc, key, value.Null))
+    Some(lexer.BraceClose) ->
+      Ok(#(value.Mapping(dict.insert(acc, key, value.Null)), advance(parser)))
+    _ -> {
+      use #(val, parser) <- result.try(parse_flow_value(parser))
+      continue_flow_mapping(key, val, parser, acc)
+    }
+  }
+}
+
+/// Continue parsing flow mapping after parsing a value.
+fn continue_flow_mapping(
+  key: String,
+  val: YamlValue,
+  parser: Parser,
+  acc: Dict(String, YamlValue),
+) -> Result(#(YamlValue, Parser), ParseError) {
+  let acc = dict.insert(acc, key, val)
+  let parser = skip_whitespace(parser)
+  case current(parser) {
+    Some(lexer.Comma) -> parse_flow_mapping_pairs(advance(parser), acc)
+    Some(lexer.BraceClose) -> Ok(#(value.Mapping(acc), advance(parser)))
+    _ -> Error(ParseError("Expected ',' or '}'", parser.pos))
+  }
+}
+
+/// Parse a flow mapping value (handles regular colon and adjacent colon patterns).
+fn parse_flow_mapping_value(
+  key: String,
+  parser: Parser,
+  acc: Dict(String, YamlValue),
+) -> Result(#(YamlValue, Parser), ParseError) {
+  case current(parser) {
+    Some(lexer.Plain(s)) -> {
+      case string.starts_with(s, ":") {
+        True -> {
+          let val = parse_adjacent_value(string.drop_start(s, 1))
+          continue_flow_mapping(key, val, advance(parser), acc)
+        }
+        False -> Error(ParseError("Expected ':', ',' or '}'", parser.pos))
+      }
+    }
+
+    Some(lexer.Colon) ->
+      parse_flow_mapping_colon_value(key, skip_whitespace(advance(parser)), acc)
+
+    Some(lexer.Comma) ->
+      parse_flow_mapping_pairs(advance(parser), dict.insert(acc, key, value.Null))
+
+    Some(lexer.BraceClose) -> {
+      let acc = dict.insert(acc, key, value.Null)
+      Ok(#(value.Mapping(acc), advance(parser)))
+    }
+
+    _ -> Error(ParseError("Expected ':', ',' or '}'", parser.pos))
   }
 }
 
