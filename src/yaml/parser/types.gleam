@@ -1,8 +1,8 @@
 //// Parser types and state.
 
 import gleam/dict.{type Dict}
-import yaml/value.{type YamlValue}
 import yaml/lexer.{type Token}
+import yaml/value.{type YamlValue}
 
 /// Parser state.
 pub type Parser {

@@ -3,11 +3,11 @@
 import gleam/dict.{type Dict}
 import gleam/option.{Some}
 import yaml/lexer
+import yaml/parser/block
+import yaml/parser/flow
 import yaml/parser/helpers.{
   advance, current, skip_newlines_and_comments, skip_spaces, token_to_string,
 }
-import yaml/parser/block
-import yaml/parser/flow
 import yaml/parser/scalar.{value_to_key_string, value_to_string}
 import yaml/parser/types.{type ParseError, type Parser, ParseError, Parser}
 import yaml/value.{type YamlValue}
@@ -48,7 +48,12 @@ fn parse_explicit_mapping_items(
               case parse_explicit_value(parser, min_indent, parse_value_fn) {
                 Ok(#(val, parser)) -> {
                   let acc = dict.insert(acc, key, val)
-                  parse_explicit_mapping_items(parser, min_indent, acc, parse_value_fn)
+                  parse_explicit_mapping_items(
+                    parser,
+                    min_indent,
+                    acc,
+                    parse_value_fn,
+                  )
                 }
                 Error(e) -> Error(e)
               }
@@ -61,7 +66,12 @@ fn parse_explicit_mapping_items(
                   case parse_value_fn(parser, n + 1) {
                     Ok(#(val, parser)) -> {
                       let acc = dict.insert(acc, key, val)
-                      parse_explicit_mapping_items(parser, min_indent, acc, parse_value_fn)
+                      parse_explicit_mapping_items(
+                        parser,
+                        min_indent,
+                        acc,
+                        parse_value_fn,
+                      )
                     }
                     Error(e) -> Error(e)
                   }
@@ -80,24 +90,46 @@ fn parse_explicit_mapping_items(
                 Some(lexer.Plain(s)) -> {
                   // Could be next implicit key
                   let acc = dict.insert(acc, key, value.Null)
-                  parse_mixed_mapping_from_plain(parser, s, min_indent, n, acc, parse_value_fn)
+                  parse_mixed_mapping_from_plain(
+                    parser,
+                    s,
+                    min_indent,
+                    n,
+                    acc,
+                    parse_value_fn,
+                  )
                 }
                 _ -> {
                   // No colon, key maps to null
                   let acc = dict.insert(acc, key, value.Null)
-                  parse_explicit_mapping_items(parser, min_indent, acc, parse_value_fn)
+                  parse_explicit_mapping_items(
+                    parser,
+                    min_indent,
+                    acc,
+                    parse_value_fn,
+                  )
                 }
               }
             }
             // Check for ? at same indent level (another explicit key with no value)
             Some(lexer.Question) -> {
               let acc = dict.insert(acc, key, value.Null)
-              parse_explicit_mapping_items(parser, min_indent, acc, parse_value_fn)
+              parse_explicit_mapping_items(
+                parser,
+                min_indent,
+                acc,
+                parse_value_fn,
+              )
             }
             _ -> {
               // No colon, key maps to null
               let acc = dict.insert(acc, key, value.Null)
-              parse_explicit_mapping_items(parser, min_indent, acc, parse_value_fn)
+              parse_explicit_mapping_items(
+                parser,
+                min_indent,
+                acc,
+                parse_value_fn,
+              )
             }
           }
         }
@@ -105,7 +137,13 @@ fn parse_explicit_mapping_items(
       }
     }
     Some(lexer.Indent(n)) if n >= min_indent -> {
-      parse_explicit_mapping_items_at_indent(parser, min_indent, n, acc, parse_value_fn)
+      parse_explicit_mapping_items_at_indent(
+        parser,
+        min_indent,
+        n,
+        acc,
+        parse_value_fn,
+      )
     }
     // Handle implicit keys at indent 0 (when min_indent == 0)
     Some(lexer.Plain(s)) if min_indent == 0 -> {
@@ -116,7 +154,12 @@ fn parse_explicit_mapping_items(
           case parse_value_fn(parser, 1) {
             Ok(#(val, parser)) -> {
               let acc = dict.insert(acc, s, val)
-              parse_explicit_mapping_items(parser, min_indent, acc, parse_value_fn)
+              parse_explicit_mapping_items(
+                parser,
+                min_indent,
+                acc,
+                parse_value_fn,
+              )
             }
             Error(e) -> Error(e)
           }
@@ -132,7 +175,12 @@ fn parse_explicit_mapping_items(
           case parse_value_fn(parser, 1) {
             Ok(#(val, parser)) -> {
               let acc = dict.insert(acc, s, val)
-              parse_explicit_mapping_items(parser, min_indent, acc, parse_value_fn)
+              parse_explicit_mapping_items(
+                parser,
+                min_indent,
+                acc,
+                parse_value_fn,
+              )
             }
             Error(e) -> Error(e)
           }
@@ -148,7 +196,12 @@ fn parse_explicit_mapping_items(
           case parse_value_fn(parser, 1) {
             Ok(#(val, parser)) -> {
               let acc = dict.insert(acc, s, val)
-              parse_explicit_mapping_items(parser, min_indent, acc, parse_value_fn)
+              parse_explicit_mapping_items(
+                parser,
+                min_indent,
+                acc,
+                parse_value_fn,
+              )
             }
             Error(e) -> Error(e)
           }
@@ -191,7 +244,12 @@ fn parse_explicit_mapping_items_at_indent(
               case parse_value_fn(parser, n + 1) {
                 Ok(#(val, parser)) -> {
                   let acc = dict.insert(acc, key, val)
-                  parse_explicit_mapping_items(parser, min_indent, acc, parse_value_fn)
+                  parse_explicit_mapping_items(
+                    parser,
+                    min_indent,
+                    acc,
+                    parse_value_fn,
+                  )
                 }
                 Error(e) -> Error(e)
               }
@@ -204,20 +262,35 @@ fn parse_explicit_mapping_items_at_indent(
                   case parse_value_fn(parser, i + 1) {
                     Ok(#(val, parser)) -> {
                       let acc = dict.insert(acc, key, val)
-                      parse_explicit_mapping_items(parser, min_indent, acc, parse_value_fn)
+                      parse_explicit_mapping_items(
+                        parser,
+                        min_indent,
+                        acc,
+                        parse_value_fn,
+                      )
                     }
                     Error(e) -> Error(e)
                   }
                 }
                 _ -> {
                   let acc = dict.insert(acc, key, value.Null)
-                  parse_explicit_mapping_items(parser, min_indent, acc, parse_value_fn)
+                  parse_explicit_mapping_items(
+                    parser,
+                    min_indent,
+                    acc,
+                    parse_value_fn,
+                  )
                 }
               }
             }
             _ -> {
               let acc = dict.insert(acc, key, value.Null)
-              parse_explicit_mapping_items(parser, min_indent, acc, parse_value_fn)
+              parse_explicit_mapping_items(
+                parser,
+                min_indent,
+                acc,
+                parse_value_fn,
+              )
             }
           }
         }
@@ -226,7 +299,14 @@ fn parse_explicit_mapping_items_at_indent(
     }
     // Handle implicit key (plain scalar followed by colon)
     Some(lexer.Plain(s)) -> {
-      parse_mixed_mapping_from_plain(parser, s, min_indent, n, acc, parse_value_fn)
+      parse_mixed_mapping_from_plain(
+        parser,
+        s,
+        min_indent,
+        n,
+        acc,
+        parse_value_fn,
+      )
     }
     Some(lexer.SingleQuoted(s)) | Some(lexer.DoubleQuoted(s)) -> {
       let parser = advance(parser) |> skip_spaces
@@ -236,7 +316,12 @@ fn parse_explicit_mapping_items_at_indent(
           case parse_value_fn(parser, n + 1) {
             Ok(#(val, parser)) -> {
               let acc = dict.insert(acc, s, val)
-              parse_explicit_mapping_items(parser, min_indent, acc, parse_value_fn)
+              parse_explicit_mapping_items(
+                parser,
+                min_indent,
+                acc,
+                parse_value_fn,
+              )
             }
             Error(e) -> Error(e)
           }
@@ -274,10 +359,19 @@ fn parse_mixed_mapping_from_plain(
 
 /// Collect multiline text for an explicit key.
 /// Stops at `:` (value separator), `?` (another key), or when indent decreases.
-fn collect_explicit_key_multiline(parser: Parser, acc: String, min_indent: Int) -> #(String, Parser) {
+fn collect_explicit_key_multiline(
+  parser: Parser,
+  acc: String,
+  min_indent: Int,
+) -> #(String, Parser) {
   case current(parser) {
     // Plain text continuation on same line
-    Some(lexer.Plain(s)) -> collect_explicit_key_multiline(advance(parser), acc <> " " <> s, min_indent)
+    Some(lexer.Plain(s)) ->
+      collect_explicit_key_multiline(
+        advance(parser),
+        acc <> " " <> s,
+        min_indent,
+      )
     // Newline - check for continuation
     Some(lexer.Newline) -> {
       let after_newline = advance(parser)
@@ -288,7 +382,12 @@ fn collect_explicit_key_multiline(parser: Parser, acc: String, min_indent: Int) 
             // Colon or question means end of key
             Some(lexer.Colon) | Some(lexer.Question) -> #(acc, after_newline)
             // Plain text continuation
-            Some(lexer.Plain(s)) -> collect_explicit_key_multiline(advance(after_indent), acc <> " " <> s, min_indent)
+            Some(lexer.Plain(s)) ->
+              collect_explicit_key_multiline(
+                advance(after_indent),
+                acc <> " " <> s,
+                min_indent,
+              )
             // Other - end of key
             _ -> #(acc, after_newline)
           }
@@ -304,13 +403,21 @@ fn collect_explicit_key_multiline(parser: Parser, acc: String, min_indent: Int) 
         // Colon or question means end of key
         Some(lexer.Colon) | Some(lexer.Question) -> #(acc, parser)
         // Plain text continuation
-        Some(lexer.Plain(s)) -> collect_explicit_key_multiline(advance(after_indent), acc <> " " <> s, min_indent)
+        Some(lexer.Plain(s)) ->
+          collect_explicit_key_multiline(
+            advance(after_indent),
+            acc <> " " <> s,
+            min_indent,
+          )
         // Other - end of key
         _ -> #(acc, parser)
       }
     }
     // Colon, question, or comment ends the key
-    Some(lexer.Colon) | Some(lexer.Question) | Some(lexer.Comment(_)) -> #(acc, parser)
+    Some(lexer.Colon) | Some(lexer.Question) | Some(lexer.Comment(_)) -> #(
+      acc,
+      parser,
+    )
     // End of key
     _ -> #(acc, parser)
   }
@@ -362,14 +469,16 @@ pub fn parse_explicit_key_value(
             // Empty value or value on next line - treat as simple key
             _ -> {
               // Not an inline mapping, backtrack - this is just the key with separator
-              let #(full_key, parser) = collect_explicit_key_multiline(parser, s, min_indent)
+              let #(full_key, parser) =
+                collect_explicit_key_multiline(parser, s, min_indent)
               Ok(#(full_key, parser))
             }
           }
         }
         _ -> {
           // Collect potential multiline continuation
-          let #(full_key, parser) = collect_explicit_key_multiline(parser, s, min_indent)
+          let #(full_key, parser) =
+            collect_explicit_key_multiline(parser, s, min_indent)
           Ok(#(full_key, parser))
         }
       }
@@ -435,7 +544,8 @@ pub fn parse_explicit_key_value(
         // Sequence at indent 0 as the key
         Some(lexer.Dash) -> {
           case block.parse_block_sequence(parser, 0, parse_value_fn) {
-            Ok(#(seq_val, parser)) -> Ok(#(value_to_key_string(seq_val), parser))
+            Ok(#(seq_val, parser)) ->
+              Ok(#(value_to_key_string(seq_val), parser))
             Error(e) -> Error(e)
           }
         }
@@ -446,12 +556,14 @@ pub fn parse_explicit_key_value(
             Some(lexer.Dash) -> {
               let parser = Parser(..after_indent, pos: after_indent.pos - 1)
               case block.parse_block_sequence(parser, n, parse_value_fn) {
-                Ok(#(seq_val, parser)) -> Ok(#(value_to_key_string(seq_val), parser))
+                Ok(#(seq_val, parser)) ->
+                  Ok(#(value_to_key_string(seq_val), parser))
                 Error(e) -> Error(e)
               }
             }
             // Other indented content - parse as key value
-            _ -> parse_explicit_key_value(after_indent, min_indent, parse_value_fn)
+            _ ->
+              parse_explicit_key_value(after_indent, min_indent, parse_value_fn)
           }
         }
         // Colon immediately after newline - empty key
@@ -467,7 +579,8 @@ pub fn parse_explicit_key_value(
         Some(lexer.Dash) -> {
           let parser = Parser(..after_indent, pos: after_indent.pos - 1)
           case block.parse_block_sequence(parser, n, parse_value_fn) {
-            Ok(#(seq_val, parser)) -> Ok(#(value_to_key_string(seq_val), parser))
+            Ok(#(seq_val, parser)) ->
+              Ok(#(value_to_key_string(seq_val), parser))
             Error(e) -> Error(e)
           }
         }

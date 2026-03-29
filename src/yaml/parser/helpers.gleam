@@ -43,7 +43,8 @@ pub fn skip_newlines_and_comments(parser: Parser) -> Parser {
       let after_indent = advance(parser)
       case current(after_indent) {
         // Indent followed by comment - skip both
-        Some(lexer.Comment(_)) -> skip_newlines_and_comments(advance(after_indent))
+        Some(lexer.Comment(_)) ->
+          skip_newlines_and_comments(advance(after_indent))
         // Indent followed by newline (blank line) - skip both
         Some(lexer.Newline) -> skip_newlines_and_comments(advance(after_indent))
         // Indent followed by something else - don't skip
@@ -73,7 +74,10 @@ fn skip_newlines_and_comments_tracking_loop(
       let after_indent = advance(parser)
       case current(after_indent) {
         Some(lexer.Comment(_)) ->
-          skip_newlines_and_comments_tracking_loop(advance(after_indent), skipped_newline)
+          skip_newlines_and_comments_tracking_loop(
+            advance(after_indent),
+            skipped_newline,
+          )
         Some(lexer.Newline) ->
           skip_newlines_and_comments_tracking_loop(advance(after_indent), True)
         _ -> #(skipped_newline, parser)

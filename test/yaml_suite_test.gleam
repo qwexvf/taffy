@@ -92,10 +92,17 @@ pub fn yaml_test_suite_test() {
   case json_mismatch_list {
     [] -> Nil
     mismatches -> {
-      io.println("\nJSON mismatches (" <> int.to_string(list.length(mismatches)) <> "):")
+      io.println(
+        "\nJSON mismatches (" <> int.to_string(list.length(mismatches)) <> "):",
+      )
       list.each(list.take(mismatches, 30), fn(r) { io.println("  - " <> r.1) })
       case list.length(mismatches) > 30 {
-        True -> io.println("  ... and " <> int.to_string(list.length(mismatches) - 30) <> " more")
+        True ->
+          io.println(
+            "  ... and "
+            <> int.to_string(list.length(mismatches) - 30)
+            <> " more",
+          )
         False -> Nil
       }
     }
@@ -197,7 +204,14 @@ fn run_single_test(path: String, test_case: yaml.Value) -> #(String, String) {
                         False -> {
                           case is_key_order_only(actual, expected) {
                             True -> #("order", name <> " (key order only)")
-                            False -> #("fail", name <> " (json mismatch)\n      Expected: " <> string.slice(expected, 0, 100) <> "\n      Actual:   " <> string.slice(actual, 0, 100))
+                            False -> #(
+                              "fail",
+                              name
+                                <> " (json mismatch)\n      Expected: "
+                                <> string.slice(expected, 0, 100)
+                                <> "\n      Actual:   "
+                                <> string.slice(actual, 0, 100),
+                            )
                           }
                         }
                       }
@@ -228,7 +242,9 @@ fn is_key_order_only(actual: String, expected: String) -> Bool {
   // and same characters (sorted), it's likely just ordering
   let a = normalize_json(actual)
   let e = normalize_json(expected)
-  let a_sorted = a |> string.to_graphemes |> list.sort(string.compare) |> string.concat
-  let e_sorted = e |> string.to_graphemes |> list.sort(string.compare) |> string.concat
+  let a_sorted =
+    a |> string.to_graphemes |> list.sort(string.compare) |> string.concat
+  let e_sorted =
+    e |> string.to_graphemes |> list.sort(string.compare) |> string.concat
   a_sorted == e_sorted
 }

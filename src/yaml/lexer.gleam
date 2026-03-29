@@ -129,11 +129,13 @@ pub fn next_token(lexer: Lexer) -> Result(#(Token, Lexer), String) {
           let lexer = advance(lexer)
           case peek(lexer) {
             // Always a mapping indicator if followed by whitespace or end
-            Some(" ") | Some("\n") | Some("\r") | Some("\t") | None -> Ok(#(Colon, lexer))
+            Some(" ") | Some("\n") | Some("\r") | Some("\t") | None ->
+              Ok(#(Colon, lexer))
             // In flow context, colon before flow indicators is also a separator
             Some(",") | Some("]") | Some("}") -> Ok(#(Colon, lexer))
             // After a quoted string, colon is typically a separator even if adjacent
-            Some("\"") | Some("'") | Some("[") | Some("{") -> Ok(#(Colon, lexer))
+            Some("\"") | Some("'") | Some("[") | Some("{") ->
+              Ok(#(Colon, lexer))
             _ -> {
               // Part of a plain scalar
               read_plain_scalar(Lexer(..lexer, pos: lexer.pos - 1))
@@ -144,7 +146,8 @@ pub fn next_token(lexer: Lexer) -> Result(#(Token, Lexer), String) {
         "?" -> {
           let lexer = advance(lexer)
           case peek(lexer) {
-            Some(" ") | Some("\n") | Some("\r") | Some("\t") | None -> Ok(#(Question, lexer))
+            Some(" ") | Some("\n") | Some("\r") | Some("\t") | None ->
+              Ok(#(Question, lexer))
             _ -> {
               // Part of a plain scalar
               read_plain_scalar(Lexer(..lexer, pos: lexer.pos - 1))
@@ -168,7 +171,8 @@ pub fn next_token(lexer: Lexer) -> Result(#(Token, Lexer), String) {
             _ -> {
               let lexer = advance(lexer)
               case peek(lexer) {
-                Some(" ") | Some("\n") | Some("\r") | Some("\t") | None -> Ok(#(Dash, lexer))
+                Some(" ") | Some("\n") | Some("\r") | Some("\t") | None ->
+                  Ok(#(Dash, lexer))
                 _ -> {
                   // Part of a plain scalar (like negative number)
                   read_plain_scalar(Lexer(..lexer, pos: lexer.pos - 1))
@@ -400,7 +404,8 @@ fn read_single_quoted_loop(
 
 fn skip_quoted_continuation_whitespace(lexer: Lexer) -> Lexer {
   case peek(lexer) {
-    Some(" ") | Some("\t") -> skip_quoted_continuation_whitespace(advance(lexer))
+    Some(" ") | Some("\t") ->
+      skip_quoted_continuation_whitespace(advance(lexer))
     _ -> lexer
   }
 }
@@ -537,10 +542,14 @@ fn read_hex_digits(
 
 fn is_letter(c: String) -> Bool {
   case c {
-    "a" | "b" | "c" | "d" | "e" | "f" | "g" | "h" | "i" | "j" | "k" | "l" | "m" -> True
-    "n" | "o" | "p" | "q" | "r" | "s" | "t" | "u" | "v" | "w" | "x" | "y" | "z" -> True
-    "A" | "B" | "C" | "D" | "E" | "F" | "G" | "H" | "I" | "J" | "K" | "L" | "M" -> True
-    "N" | "O" | "P" | "Q" | "R" | "S" | "T" | "U" | "V" | "W" | "X" | "Y" | "Z" -> True
+    "a" | "b" | "c" | "d" | "e" | "f" | "g" | "h" | "i" | "j" | "k" | "l" | "m" ->
+      True
+    "n" | "o" | "p" | "q" | "r" | "s" | "t" | "u" | "v" | "w" | "x" | "y" | "z" ->
+      True
+    "A" | "B" | "C" | "D" | "E" | "F" | "G" | "H" | "I" | "J" | "K" | "L" | "M" ->
+      True
+    "N" | "O" | "P" | "Q" | "R" | "S" | "T" | "U" | "V" | "W" | "X" | "Y" | "Z" ->
+      True
     _ -> False
   }
 }
@@ -642,8 +651,14 @@ fn read_literal_block(lexer: Lexer) -> Result(#(Token, Lexer), String) {
     Some("\r") -> {
       let lexer = advance(lexer)
       case peek(lexer) {
-        Some("\n") -> read_literal_content(advance(lexer), header.chomping, header.explicit_indent)
-        _ -> read_literal_content(lexer, header.chomping, header.explicit_indent)
+        Some("\n") ->
+          read_literal_content(
+            advance(lexer),
+            header.chomping,
+            header.explicit_indent,
+          )
+        _ ->
+          read_literal_content(lexer, header.chomping, header.explicit_indent)
       }
     }
     _ -> Ok(#(Literal(""), lexer))
@@ -667,7 +682,12 @@ fn read_folded_block(lexer: Lexer) -> Result(#(Token, Lexer), String) {
     Some("\r") -> {
       let lexer = advance(lexer)
       case peek(lexer) {
-        Some("\n") -> read_folded_content(advance(lexer), header.chomping, header.explicit_indent)
+        Some("\n") ->
+          read_folded_content(
+            advance(lexer),
+            header.chomping,
+            header.explicit_indent,
+          )
         _ -> read_folded_content(lexer, header.chomping, header.explicit_indent)
       }
     }
@@ -698,17 +718,61 @@ fn read_block_header_loop(
   header: BlockHeader,
 ) -> #(BlockHeader, Lexer) {
   case peek(lexer) {
-    Some("-") -> read_block_header_loop(advance(lexer), BlockHeader(..header, chomping: Strip))
-    Some("+") -> read_block_header_loop(advance(lexer), BlockHeader(..header, chomping: Keep))
-    Some("1") -> read_block_header_loop(advance(lexer), BlockHeader(..header, explicit_indent: Some(1)))
-    Some("2") -> read_block_header_loop(advance(lexer), BlockHeader(..header, explicit_indent: Some(2)))
-    Some("3") -> read_block_header_loop(advance(lexer), BlockHeader(..header, explicit_indent: Some(3)))
-    Some("4") -> read_block_header_loop(advance(lexer), BlockHeader(..header, explicit_indent: Some(4)))
-    Some("5") -> read_block_header_loop(advance(lexer), BlockHeader(..header, explicit_indent: Some(5)))
-    Some("6") -> read_block_header_loop(advance(lexer), BlockHeader(..header, explicit_indent: Some(6)))
-    Some("7") -> read_block_header_loop(advance(lexer), BlockHeader(..header, explicit_indent: Some(7)))
-    Some("8") -> read_block_header_loop(advance(lexer), BlockHeader(..header, explicit_indent: Some(8)))
-    Some("9") -> read_block_header_loop(advance(lexer), BlockHeader(..header, explicit_indent: Some(9)))
+    Some("-") ->
+      read_block_header_loop(
+        advance(lexer),
+        BlockHeader(..header, chomping: Strip),
+      )
+    Some("+") ->
+      read_block_header_loop(
+        advance(lexer),
+        BlockHeader(..header, chomping: Keep),
+      )
+    Some("1") ->
+      read_block_header_loop(
+        advance(lexer),
+        BlockHeader(..header, explicit_indent: Some(1)),
+      )
+    Some("2") ->
+      read_block_header_loop(
+        advance(lexer),
+        BlockHeader(..header, explicit_indent: Some(2)),
+      )
+    Some("3") ->
+      read_block_header_loop(
+        advance(lexer),
+        BlockHeader(..header, explicit_indent: Some(3)),
+      )
+    Some("4") ->
+      read_block_header_loop(
+        advance(lexer),
+        BlockHeader(..header, explicit_indent: Some(4)),
+      )
+    Some("5") ->
+      read_block_header_loop(
+        advance(lexer),
+        BlockHeader(..header, explicit_indent: Some(5)),
+      )
+    Some("6") ->
+      read_block_header_loop(
+        advance(lexer),
+        BlockHeader(..header, explicit_indent: Some(6)),
+      )
+    Some("7") ->
+      read_block_header_loop(
+        advance(lexer),
+        BlockHeader(..header, explicit_indent: Some(7)),
+      )
+    Some("8") ->
+      read_block_header_loop(
+        advance(lexer),
+        BlockHeader(..header, explicit_indent: Some(8)),
+      )
+    Some("9") ->
+      read_block_header_loop(
+        advance(lexer),
+        BlockHeader(..header, explicit_indent: Some(9)),
+      )
     Some(" ") | Some("\t") -> read_block_header_loop(advance(lexer), header)
     Some("#") -> {
       // Skip comment
@@ -748,7 +812,8 @@ fn read_literal_content(
       // Start with the leading empty lines
       let prefix = string.repeat("\n", leading_newlines)
       // Use detected_indent for block boundaries, base_indent for extra space calculation
-      let #(content, lexer) = read_literal_lines_ex(lexer, detected_indent, base_indent, prefix)
+      let #(content, lexer) =
+        read_literal_lines_ex(lexer, detected_indent, base_indent, prefix)
       let content = apply_chomping(content, chomping)
       Ok(#(Literal(content), lexer))
     }
@@ -769,7 +834,8 @@ fn read_folded_content(
         True -> FoldAfterBlank
         False -> FoldNormal
       }
-      let #(content, lexer) = read_folded_lines(lexer, indent, prefix, initial_state)
+      let #(content, lexer) =
+        read_folded_lines(lexer, indent, prefix, initial_state)
       let content = apply_chomping(content, chomping)
       Ok(#(Folded(content), lexer))
     }
@@ -778,7 +844,8 @@ fn read_folded_content(
       case find_block_indent(lexer) {
         NoContent(lexer) -> Ok(#(Folded(""), lexer))
         FoundContent(block_indent, lexer) -> {
-          let #(content, lexer) = read_folded_lines(lexer, block_indent, "", FoldNormal)
+          let #(content, lexer) =
+            read_folded_lines(lexer, block_indent, "", FoldNormal)
           let content = apply_chomping(content, chomping)
           Ok(#(Folded(content), lexer))
         }
@@ -793,7 +860,8 @@ fn count_leading_empty_lines(lexer: Lexer, count: Int) -> #(Int, Lexer) {
   let #(_indent, lexer_after_spaces) = count_leading_spaces(lexer, 0)
   case peek(lexer_after_spaces) {
     // Empty line - count it and continue
-    Some("\n") -> count_leading_empty_lines(advance(lexer_after_spaces), count + 1)
+    Some("\n") ->
+      count_leading_empty_lines(advance(lexer_after_spaces), count + 1)
     Some("\r") -> {
       let lexer = advance(lexer_after_spaces)
       case peek(lexer) {
@@ -869,14 +937,30 @@ fn read_literal_lines_ex(
   case peek(lexer) {
     Some("\n") -> {
       let lexer = advance(lexer)
-      check_literal_continuation_ex(lexer, boundary_indent, base_indent, new_acc)
+      check_literal_continuation_ex(
+        lexer,
+        boundary_indent,
+        base_indent,
+        new_acc,
+      )
     }
     Some("\r") -> {
       let lexer = advance(lexer)
       case peek(lexer) {
         Some("\n") ->
-          check_literal_continuation_ex(advance(lexer), boundary_indent, base_indent, new_acc)
-        _ -> check_literal_continuation_ex(lexer, boundary_indent, base_indent, new_acc)
+          check_literal_continuation_ex(
+            advance(lexer),
+            boundary_indent,
+            base_indent,
+            new_acc,
+          )
+        _ ->
+          check_literal_continuation_ex(
+            lexer,
+            boundary_indent,
+            base_indent,
+            new_acc,
+          )
       }
     }
     _ -> #(new_acc, lexer)
@@ -898,13 +982,30 @@ fn check_literal_continuation_ex(
   case peek(after_spaces) {
     // Empty line - include it and continue
     Some("\n") -> {
-      check_literal_continuation_ex(advance(after_spaces), boundary_indent, base_indent, acc <> "\n")
+      check_literal_continuation_ex(
+        advance(after_spaces),
+        boundary_indent,
+        base_indent,
+        acc <> "\n",
+      )
     }
     Some("\r") -> {
       let lexer_after_cr = advance(after_spaces)
       case peek(lexer_after_cr) {
-        Some("\n") -> check_literal_continuation_ex(advance(lexer_after_cr), boundary_indent, base_indent, acc <> "\n")
-        _ -> check_literal_continuation_ex(lexer_after_cr, boundary_indent, base_indent, acc <> "\n")
+        Some("\n") ->
+          check_literal_continuation_ex(
+            advance(lexer_after_cr),
+            boundary_indent,
+            base_indent,
+            acc <> "\n",
+          )
+        _ ->
+          check_literal_continuation_ex(
+            lexer_after_cr,
+            boundary_indent,
+            base_indent,
+            acc <> "\n",
+          )
       }
     }
     None -> #(acc, lexer)
@@ -921,7 +1022,12 @@ fn check_literal_continuation_ex(
           let new_acc = acc <> "\n" <> line
           case peek(lexer) {
             Some("\n") ->
-              check_literal_continuation_ex(advance(lexer), boundary_indent, base_indent, new_acc)
+              check_literal_continuation_ex(
+                advance(lexer),
+                boundary_indent,
+                base_indent,
+                new_acc,
+              )
             Some("\r") -> {
               let lexer = advance(lexer)
               case peek(lexer) {
@@ -932,7 +1038,13 @@ fn check_literal_continuation_ex(
                     base_indent,
                     new_acc,
                   )
-                _ -> check_literal_continuation_ex(lexer, boundary_indent, base_indent, new_acc)
+                _ ->
+                  check_literal_continuation_ex(
+                    lexer,
+                    boundary_indent,
+                    base_indent,
+                    new_acc,
+                  )
               }
             }
             _ -> #(new_acc, lexer)
@@ -972,12 +1084,23 @@ fn read_folded_lines(
   case peek(after_spaces) {
     // Empty line - add a newline and mark that we came from blank
     Some("\n") -> {
-      read_folded_lines(advance(after_spaces), block_indent, acc <> "\n", FoldAfterBlank)
+      read_folded_lines(
+        advance(after_spaces),
+        block_indent,
+        acc <> "\n",
+        FoldAfterBlank,
+      )
     }
     Some("\r") -> {
       let lexer = advance(after_spaces)
       case peek(lexer) {
-        Some("\n") -> read_folded_lines(advance(lexer), block_indent, acc <> "\n", FoldAfterBlank)
+        Some("\n") ->
+          read_folded_lines(
+            advance(lexer),
+            block_indent,
+            acc <> "\n",
+            FoldAfterBlank,
+          )
         _ -> read_folded_lines(lexer, block_indent, acc <> "\n", FoldAfterBlank)
       }
     }
@@ -1001,18 +1124,19 @@ fn read_folded_lines(
           // - Normal + normal: fold with space
           let new_acc = case acc {
             "" -> line
-            _ -> case state, is_more_indented {
-              // After blank + more-indented: add \n (preserved line break)
-              FoldAfterBlank, True -> acc <> "\n" <> line
-              // After blank + normal: just append
-              FoldAfterBlank, False -> acc <> line
-              // After more-indented + anything: just append (\n already added)
-              FoldAfterMoreIndented, _ -> acc <> line
-              // Normal + more-indented: add \n (preserved line break)
-              FoldNormal, True -> acc <> "\n" <> line
-              // Normal + normal: fold with space
-              FoldNormal, False -> acc <> " " <> line
-            }
+            _ ->
+              case state, is_more_indented {
+                // After blank + more-indented: add \n (preserved line break)
+                FoldAfterBlank, True -> acc <> "\n" <> line
+                // After blank + normal: just append
+                FoldAfterBlank, False -> acc <> line
+                // After more-indented + anything: just append (\n already added)
+                FoldAfterMoreIndented, _ -> acc <> line
+                // Normal + more-indented: add \n (preserved line break)
+                FoldNormal, True -> acc <> "\n" <> line
+                // Normal + normal: fold with space
+                FoldNormal, False -> acc <> " " <> line
+              }
           }
 
           // Peek at next line to determine how to continue
@@ -1020,8 +1144,20 @@ fn read_folded_lines(
             Some("\n") -> {
               // If this was a more-indented line, add newline and set state
               case is_more_indented {
-                True -> read_folded_lines(advance(lexer), block_indent, new_acc <> "\n", FoldAfterMoreIndented)
-                False -> read_folded_lines(advance(lexer), block_indent, new_acc, FoldNormal)
+                True ->
+                  read_folded_lines(
+                    advance(lexer),
+                    block_indent,
+                    new_acc <> "\n",
+                    FoldAfterMoreIndented,
+                  )
+                False ->
+                  read_folded_lines(
+                    advance(lexer),
+                    block_indent,
+                    new_acc,
+                    FoldNormal,
+                  )
               }
             }
             Some("\r") -> {
@@ -1029,14 +1165,38 @@ fn read_folded_lines(
               case is_more_indented {
                 True -> {
                   case peek(lexer) {
-                    Some("\n") -> read_folded_lines(advance(lexer), block_indent, new_acc <> "\n", FoldAfterMoreIndented)
-                    _ -> read_folded_lines(lexer, block_indent, new_acc <> "\n", FoldAfterMoreIndented)
+                    Some("\n") ->
+                      read_folded_lines(
+                        advance(lexer),
+                        block_indent,
+                        new_acc <> "\n",
+                        FoldAfterMoreIndented,
+                      )
+                    _ ->
+                      read_folded_lines(
+                        lexer,
+                        block_indent,
+                        new_acc <> "\n",
+                        FoldAfterMoreIndented,
+                      )
                   }
                 }
                 False -> {
                   case peek(lexer) {
-                    Some("\n") -> read_folded_lines(advance(lexer), block_indent, new_acc, FoldNormal)
-                    _ -> read_folded_lines(lexer, block_indent, new_acc, FoldNormal)
+                    Some("\n") ->
+                      read_folded_lines(
+                        advance(lexer),
+                        block_indent,
+                        new_acc,
+                        FoldNormal,
+                      )
+                    _ ->
+                      read_folded_lines(
+                        lexer,
+                        block_indent,
+                        new_acc,
+                        FoldNormal,
+                      )
                   }
                 }
               }

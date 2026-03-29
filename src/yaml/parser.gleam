@@ -96,7 +96,12 @@ pub fn parse_value(
                   ..after_plain,
                   anchors: dict.insert(parser.anchors, name, value.String(s)),
                 )
-              block.parse_block_mapping_from_key(s, advance(parser), min_indent, parse_value)
+              block.parse_block_mapping_from_key(
+                s,
+                advance(parser),
+                min_indent,
+                parse_value,
+              )
             }
             _ -> {
               // Not a mapping key, anchor is on the scalar value
@@ -120,7 +125,12 @@ pub fn parse_value(
                   ..after_quoted,
                   anchors: dict.insert(parser.anchors, name, value.String(s)),
                 )
-              block.parse_block_mapping_from_key(s, advance(parser), min_indent, parse_value)
+              block.parse_block_mapping_from_key(
+                s,
+                advance(parser),
+                min_indent,
+                parse_value,
+              )
             }
             _ -> {
               // Not a mapping key, anchor is on the string value
@@ -138,7 +148,10 @@ pub fn parse_value(
           case parse_value(parser, min_indent) {
             Ok(#(val, parser)) -> {
               let parser =
-                Parser(..parser, anchors: dict.insert(parser.anchors, name, val))
+                Parser(
+                  ..parser,
+                  anchors: dict.insert(parser.anchors, name, val),
+                )
               Ok(#(val, parser))
             }
             Error(e) -> Error(e)
@@ -171,7 +184,12 @@ pub fn parse_value(
             // Flow sequence used as mapping key
             Some(lexer.Colon) -> {
               let key = scalar.value_to_key_string(seq_val)
-              block.parse_block_mapping_from_key(key, advance(parser), min_indent, parse_value)
+              block.parse_block_mapping_from_key(
+                key,
+                advance(parser),
+                min_indent,
+                parse_value,
+              )
             }
             _ -> Ok(#(seq_val, parser))
           }
@@ -189,7 +207,12 @@ pub fn parse_value(
             // Flow mapping used as mapping key
             Some(lexer.Colon) -> {
               let key = scalar.value_to_key_string(map_val)
-              block.parse_block_mapping_from_key(key, advance(parser), min_indent, parse_value)
+              block.parse_block_mapping_from_key(
+                key,
+                advance(parser),
+                min_indent,
+                parse_value,
+              )
             }
             _ -> Ok(#(map_val, parser))
           }
@@ -199,10 +222,12 @@ pub fn parse_value(
     }
 
     // Block sequence
-    Some(lexer.Dash) -> block.parse_block_sequence(parser, min_indent, parse_value)
+    Some(lexer.Dash) ->
+      block.parse_block_sequence(parser, min_indent, parse_value)
 
     // Explicit mapping key (?)
-    Some(lexer.Question) -> explicit.parse_explicit_mapping(parser, min_indent, parse_value)
+    Some(lexer.Question) ->
+      explicit.parse_explicit_mapping(parser, min_indent, parse_value)
 
     // Empty key mapping (: with no key) OR plain scalar starting with colon
     Some(lexer.Colon) -> {
@@ -222,16 +247,34 @@ pub fn parse_value(
         | Some(lexer.Comment(_))
         | Some(lexer.Eof)
         | None ->
-          block.parse_block_mapping_from_key("", after_colon, min_indent, parse_value)
+          block.parse_block_mapping_from_key(
+            "",
+            after_colon,
+            min_indent,
+            parse_value,
+          )
         // Non-whitespace after colon - treat as plain scalar starting with :
-        Some(lexer.Colon) | Some(lexer.Comma) | Some(lexer.BracketClose) | Some(lexer.BraceClose) -> {
+        Some(lexer.Colon)
+        | Some(lexer.Comma)
+        | Some(lexer.BracketClose)
+        | Some(lexer.BraceClose) -> {
           // Collect the rest of the plain scalar
           let #(rest, parser) = collect_plain_scalar_from_colon(after_colon)
           Ok(#(parse_scalar(":" <> rest), parser))
         }
         // Tags after colon - still a mapping value
-        Some(lexer.Tag(_)) | Some(lexer.Question) | Some(lexer.Literal(_)) | Some(lexer.Folded(_)) | Some(lexer.DocStart) | Some(lexer.DocEnd) ->
-          block.parse_block_mapping_from_key("", after_colon, min_indent, parse_value)
+        Some(lexer.Tag(_))
+        | Some(lexer.Question)
+        | Some(lexer.Literal(_))
+        | Some(lexer.Folded(_))
+        | Some(lexer.DocStart)
+        | Some(lexer.DocEnd) ->
+          block.parse_block_mapping_from_key(
+            "",
+            after_colon,
+            min_indent,
+            parse_value,
+          )
       }
     }
 
@@ -271,21 +314,33 @@ pub fn parse_value(
             | Some(lexer.BracketOpen)
             | Some(lexer.BraceOpen)
             | None ->
-              block.parse_block_mapping_from_key(full_key, after_colon, min_indent, parse_value)
+              block.parse_block_mapping_from_key(
+                full_key,
+                after_colon,
+                min_indent,
+                parse_value,
+              )
             // Colon followed by non-whitespace = continue collecting
             _ -> {
-              let #(rest, parser) = collect_block_plain_value(after_colon, full_key <> ":", min_indent)
+              let #(rest, parser) =
+                collect_block_plain_value(
+                  after_colon,
+                  full_key <> ":",
+                  min_indent,
+                )
               Ok(#(parse_scalar(rest), parser))
             }
           }
         }
         // Not a mapping key - check for multiline scalar continuation
         Some(lexer.Newline) -> {
-          let #(full_value, parser) = check_multiline_continuation(advance(parser), full_key, min_indent)
+          let #(full_value, parser) =
+            check_multiline_continuation(advance(parser), full_key, min_indent)
           Ok(#(parse_scalar(full_value), parser))
         }
         Some(lexer.Indent(n)) if n >= min_indent -> {
-          let #(full_value, parser) = collect_block_plain_value(parser, full_key, min_indent)
+          let #(full_value, parser) =
+            collect_block_plain_value(parser, full_key, min_indent)
           Ok(#(parse_scalar(full_value), parser))
         }
         _ -> Ok(#(parse_scalar(full_key), parser))
@@ -296,7 +351,12 @@ pub fn parse_value(
       let parser = advance(parser) |> skip_spaces
       case current(parser) {
         Some(lexer.Colon) ->
-          block.parse_block_mapping_from_key(s, advance(parser), min_indent, parse_value)
+          block.parse_block_mapping_from_key(
+            s,
+            advance(parser),
+            min_indent,
+            parse_value,
+          )
         _ -> Ok(#(value.String(s), parser))
       }
     }
@@ -305,7 +365,12 @@ pub fn parse_value(
       let parser = advance(parser) |> skip_spaces
       case current(parser) {
         Some(lexer.Colon) ->
-          block.parse_block_mapping_from_key(s, advance(parser), min_indent, parse_value)
+          block.parse_block_mapping_from_key(
+            s,
+            advance(parser),
+            min_indent,
+            parse_value,
+          )
         _ -> Ok(#(value.String(s), parser))
       }
     }
@@ -351,10 +416,14 @@ fn collect_block_plain_key(parser: Parser, acc: String) -> #(String, Parser) {
   case current(parser) {
     // Flow indicators in block context are part of the key
     Some(lexer.Comma) -> collect_block_plain_key(advance(parser), acc <> ",")
-    Some(lexer.BracketOpen) -> collect_block_plain_key(advance(parser), acc <> "[")
-    Some(lexer.BracketClose) -> collect_block_plain_key(advance(parser), acc <> "]")
-    Some(lexer.BraceOpen) -> collect_block_plain_key(advance(parser), acc <> "{")
-    Some(lexer.BraceClose) -> collect_block_plain_key(advance(parser), acc <> "}")
+    Some(lexer.BracketOpen) ->
+      collect_block_plain_key(advance(parser), acc <> "[")
+    Some(lexer.BracketClose) ->
+      collect_block_plain_key(advance(parser), acc <> "]")
+    Some(lexer.BraceOpen) ->
+      collect_block_plain_key(advance(parser), acc <> "{")
+    Some(lexer.BraceClose) ->
+      collect_block_plain_key(advance(parser), acc <> "}")
     // Colon might be part of the key or the separator - return to caller to decide
     Some(lexer.Colon) -> {
       // Look ahead: if followed by closing flow indicators or another colon immediately, it's part of the key
@@ -364,8 +433,7 @@ fn collect_block_plain_key(parser: Parser, acc: String) -> #(String, Parser) {
         Some(lexer.BracketClose)
         | Some(lexer.BraceClose)
         | Some(lexer.Colon)
-        | Some(lexer.Comma) ->
-          collect_block_plain_key(after_colon, acc <> ":")
+        | Some(lexer.Comma) -> collect_block_plain_key(after_colon, acc <> ":")
         // Otherwise, the colon is the key separator
         // This includes colon followed by space, opening brackets (values), etc.
         _ -> #(acc, parser)
@@ -380,21 +448,34 @@ fn collect_block_plain_key(parser: Parser, acc: String) -> #(String, Parser) {
 
 /// Collect a block plain value (including flow indicators which are plain text in block context).
 /// Supports multiline plain scalars where continuation lines are indented >= min_indent.
-fn collect_block_plain_value(parser: Parser, acc: String, min_indent: Int) -> #(String, Parser) {
+fn collect_block_plain_value(
+  parser: Parser,
+  acc: String,
+  min_indent: Int,
+) -> #(String, Parser) {
   case current(parser) {
     // Flow indicators in block context are part of the value
-    Some(lexer.Comma) -> collect_block_plain_value(advance(parser), acc <> ",", min_indent)
-    Some(lexer.BracketOpen) -> collect_block_plain_value(advance(parser), acc <> "[", min_indent)
-    Some(lexer.BracketClose) -> collect_block_plain_value(advance(parser), acc <> "]", min_indent)
-    Some(lexer.BraceOpen) -> collect_block_plain_value(advance(parser), acc <> "{", min_indent)
-    Some(lexer.BraceClose) -> collect_block_plain_value(advance(parser), acc <> "}", min_indent)
-    Some(lexer.Colon) -> collect_block_plain_value(advance(parser), acc <> ":", min_indent)
+    Some(lexer.Comma) ->
+      collect_block_plain_value(advance(parser), acc <> ",", min_indent)
+    Some(lexer.BracketOpen) ->
+      collect_block_plain_value(advance(parser), acc <> "[", min_indent)
+    Some(lexer.BracketClose) ->
+      collect_block_plain_value(advance(parser), acc <> "]", min_indent)
+    Some(lexer.BraceOpen) ->
+      collect_block_plain_value(advance(parser), acc <> "{", min_indent)
+    Some(lexer.BraceClose) ->
+      collect_block_plain_value(advance(parser), acc <> "}", min_indent)
+    Some(lexer.Colon) ->
+      collect_block_plain_value(advance(parser), acc <> ":", min_indent)
     // Plain scalar continuation on same line
-    Some(lexer.Plain(s)) -> collect_block_plain_value(advance(parser), acc <> " " <> s, min_indent)
+    Some(lexer.Plain(s)) ->
+      collect_block_plain_value(advance(parser), acc <> " " <> s, min_indent)
     // Tag in plain scalar context - treat as literal text
-    Some(lexer.Tag(s)) -> collect_block_plain_value(advance(parser), acc <> " " <> s, min_indent)
+    Some(lexer.Tag(s)) ->
+      collect_block_plain_value(advance(parser), acc <> " " <> s, min_indent)
     // Anchor in plain scalar context - treat as literal text
-    Some(lexer.Anchor(s)) -> collect_block_plain_value(advance(parser), acc <> " &" <> s, min_indent)
+    Some(lexer.Anchor(s)) ->
+      collect_block_plain_value(advance(parser), acc <> " &" <> s, min_indent)
     // Newline - check for multiline continuation
     // If followed by Indent, it's a blank line (add \n)
     // If followed by Plain (at indent 0), it's a normal line break
@@ -413,8 +494,10 @@ fn collect_block_plain_value(parser: Parser, acc: String, min_indent: Int) -> #(
       let after_indent = advance(parser)
       case current(after_indent) {
         // Stop at indicators that start new structures
-        Some(lexer.Dash) | Some(lexer.Question) | Some(lexer.Colon) ->
-          #(acc, parser)
+        Some(lexer.Dash) | Some(lexer.Question) | Some(lexer.Colon) -> #(
+          acc,
+          parser,
+        )
         // Comment after indent ends the scalar
         Some(lexer.Comment(_)) -> #(acc, parser)
         // Another Indent = blank line with leading spaces, add \n and continue
@@ -430,7 +513,11 @@ fn collect_block_plain_value(parser: Parser, acc: String, min_indent: Int) -> #(
                 True -> ""
                 False -> " "
               }
-              collect_block_plain_value(advance(after_indent), acc <> sep <> s, min_indent)
+              collect_block_plain_value(
+                advance(after_indent),
+                acc <> sep <> s,
+                min_indent,
+              )
             }
           }
         }
@@ -440,7 +527,11 @@ fn collect_block_plain_value(parser: Parser, acc: String, min_indent: Int) -> #(
             True -> ""
             False -> " "
           }
-          collect_block_plain_value(advance(after_indent), acc <> sep <> s, min_indent)
+          collect_block_plain_value(
+            advance(after_indent),
+            acc <> sep <> s,
+            min_indent,
+          )
         }
         // Anchor at start of continuation line - treat as plain text
         Some(lexer.Anchor(s)) -> {
@@ -448,7 +539,11 @@ fn collect_block_plain_value(parser: Parser, acc: String, min_indent: Int) -> #(
             True -> ""
             False -> " "
           }
-          collect_block_plain_value(advance(after_indent), acc <> sep <> "&" <> s, min_indent)
+          collect_block_plain_value(
+            advance(after_indent),
+            acc <> sep <> "&" <> s,
+            min_indent,
+          )
         }
         // Other tokens end the scalar
         _ -> #(acc, parser)
@@ -460,7 +555,11 @@ fn collect_block_plain_value(parser: Parser, acc: String, min_indent: Int) -> #(
 }
 
 /// Check for multiline continuation after a newline (at indent 0).
-fn check_multiline_continuation(parser: Parser, acc: String, min_indent: Int) -> #(String, Parser) {
+fn check_multiline_continuation(
+  parser: Parser,
+  acc: String,
+  min_indent: Int,
+) -> #(String, Parser) {
   case current(parser) {
     // Another newline means a blank line - preserve as literal newline
     Some(lexer.Newline) -> {
@@ -471,13 +570,19 @@ fn check_multiline_continuation(parser: Parser, acc: String, min_indent: Int) ->
       let after_indent = advance(parser)
       case current(after_indent) {
         // Stop at indicators that start new structures
-        Some(lexer.Dash) | Some(lexer.Question) | Some(lexer.Colon) ->
-          #(acc, Parser(..parser, pos: parser.pos - 1))
+        Some(lexer.Dash) | Some(lexer.Question) | Some(lexer.Colon) -> #(
+          acc,
+          Parser(..parser, pos: parser.pos - 1),
+        )
         // Comment ends the scalar
         Some(lexer.Comment(_)) -> #(acc, Parser(..parser, pos: parser.pos - 1))
         // Another newline - blank line with indent (treat indent as part of blank line)
         Some(lexer.Newline) ->
-          check_multiline_continuation(advance(after_indent), acc <> "\n", min_indent)
+          check_multiline_continuation(
+            advance(after_indent),
+            acc <> "\n",
+            min_indent,
+          )
         // Plain text - check if it's a mapping key (followed by colon)
         Some(lexer.Plain(s)) -> {
           // Look ahead to see if this plain is followed by colon (making it a mapping key)
@@ -489,7 +594,11 @@ fn check_multiline_continuation(parser: Parser, acc: String, min_indent: Int) ->
                 True -> ""
                 False -> " "
               }
-              collect_block_plain_value(advance(after_indent), acc <> sep <> s, min_indent)
+              collect_block_plain_value(
+                advance(after_indent),
+                acc <> sep <> s,
+                min_indent,
+              )
             }
           }
         }
@@ -499,7 +608,11 @@ fn check_multiline_continuation(parser: Parser, acc: String, min_indent: Int) ->
             True -> ""
             False -> " "
           }
-          collect_block_plain_value(advance(after_indent), acc <> sep <> s, min_indent)
+          collect_block_plain_value(
+            advance(after_indent),
+            acc <> sep <> s,
+            min_indent,
+          )
         }
         // Anchor at start of continuation line - treat as plain text (not a real anchor)
         Some(lexer.Anchor(s)) -> {
@@ -507,7 +620,11 @@ fn check_multiline_continuation(parser: Parser, acc: String, min_indent: Int) ->
             True -> ""
             False -> " "
           }
-          collect_block_plain_value(advance(after_indent), acc <> sep <> "&" <> s, min_indent)
+          collect_block_plain_value(
+            advance(after_indent),
+            acc <> sep <> "&" <> s,
+            min_indent,
+          )
         }
         // Quoted strings followed by colon are mapping keys
         Some(lexer.SingleQuoted(_)) | Some(lexer.DoubleQuoted(_)) -> {
@@ -530,7 +647,11 @@ fn check_multiline_continuation(parser: Parser, acc: String, min_indent: Int) ->
             True -> ""
             False -> " "
           }
-          collect_block_plain_value(advance(parser), acc <> sep <> s, min_indent)
+          collect_block_plain_value(
+            advance(parser),
+            acc <> sep <> s,
+            min_indent,
+          )
         }
       }
     }
@@ -542,7 +663,9 @@ fn check_multiline_continuation(parser: Parser, acc: String, min_indent: Int) ->
 /// Check if the current position starts a mapping key (scalar followed by colon).
 fn is_mapping_key(parser: Parser) -> Bool {
   case current(parser) {
-    Some(lexer.Plain(_)) | Some(lexer.SingleQuoted(_)) | Some(lexer.DoubleQuoted(_)) -> {
+    Some(lexer.Plain(_))
+    | Some(lexer.SingleQuoted(_))
+    | Some(lexer.DoubleQuoted(_)) -> {
       // Advance past the scalar and check for colon
       let after_scalar = advance(parser)
       case current(after_scalar) {
