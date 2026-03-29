@@ -29,7 +29,8 @@ import gleam/json.{type Json}
 import gleam/list
 import gleam/option.{type Option}
 import yaml/lexer
-import yaml/parser.{type ParseError, ParseError}
+import yaml/parser
+import yaml/parser/types.{type ParseError, ParseError}
 import yaml/value.{type YamlValue}
 
 // Re-export types

@@ -237,6 +237,38 @@ greeting: *myname"
   yaml.get(val, "greeting") |> should.equal(Ok(value.String("John")))
 }
 
+pub fn parse_anchor_nested_mapping_test() {
+  let input =
+    "bill-to: &id001
+  given: Chris
+ship-to: *id001"
+
+  let result = yaml.parse(input)
+  result |> should.be_ok
+
+  let assert Ok(val) = result
+  yaml.get_path(val, ["bill-to", "given"])
+  |> should.equal(Ok(value.String("Chris")))
+  yaml.get_path(val, ["ship-to", "given"])
+  |> should.equal(Ok(value.String("Chris")))
+}
+
+pub fn parse_anchor_with_literal_test() {
+  // Test with 2-space indent and nested mapping (just address, no given)
+  let input =
+    "bill-to: &id001
+  address:
+    city: Royal Oak
+ship-to: *id001"
+
+  let result = yaml.parse(input)
+  result |> should.be_ok
+
+  let assert Ok(val) = result
+  yaml.get_path(val, ["ship-to", "address"])
+  |> should.be_ok
+}
+
 // Accessor tests
 
 pub fn as_string_test() {
@@ -271,9 +303,10 @@ pub fn is_null_test() {
 // JSON conversion tests
 
 pub fn to_json_string_test() {
-  let val = value.Mapping(
-    dict.from_list([#("name", value.String("John")), #("age", value.Int(30))]),
-  )
+  let val =
+    value.Mapping(
+      dict.from_list([#("name", value.String("John")), #("age", value.Int(30))]),
+    )
 
   let json_str = yaml.to_json_string(val)
   // Should be valid JSON

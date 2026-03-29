@@ -1,32 +1,22 @@
 //// YAML parser - parses tokens into YAML values.
 
-import gleam/dict.{type Dict}
-import gleam/float
-import gleam/int
-import gleam/list
-import gleam/option.{type Option, None, Some}
+import gleam/dict
+import gleam/option.{None, Some}
 import gleam/string
 import yaml/lexer.{type Token}
+import yaml/parser/block
+import yaml/parser/explicit
+import yaml/parser/flow
+import yaml/parser/helpers.{
+  advance, current, skip_newlines_and_comments, skip_spaces, token_to_string,
+}
+import yaml/parser/scalar.{parse_scalar}
+import yaml/parser/types.{type ParseError, type Parser, ParseError, Parser}
 import yaml/value.{type YamlValue}
-
-/// Parser state.
-pub type Parser {
-  Parser(
-    tokens: List(Token),
-    pos: Int,
-    anchors: Dict(String, YamlValue),
-    indent_stack: List(Int),
-  )
-}
-
-/// Parse error.
-pub type ParseError {
-  ParseError(message: String, pos: Int)
-}
 
 /// Creates a new parser from tokens.
 pub fn new(tokens: List(Token)) -> Parser {
-  Parser(tokens: tokens, pos: 0, anchors: dict.new(), indent_stack: [0])
+  types.new(tokens)
 }
 
 /// Parses tokens into a YAML value.
@@ -41,33 +31,119 @@ pub fn parse(tokens: List(Token)) -> Result(YamlValue, ParseError) {
   }
 
   case parse_value(parser, 0) {
-    Ok(#(value, _)) -> Ok(value)
+    Ok(#(val, parser)) -> {
+      // Check for trailing content after the value
+      let parser = skip_newlines_and_comments(parser)
+      case current(parser) {
+        None | Some(lexer.Eof) -> Ok(val)
+        // Multiple documents - we only parse the first one
+        Some(lexer.DocStart) -> Ok(val)
+        Some(lexer.DocEnd) -> {
+          // Skip document end - content after ... is a new document
+          // We only return the first document, so ignore the rest
+          Ok(val)
+        }
+        Some(token) ->
+          Error(ParseError(
+            "Unexpected trailing content: " <> token_to_string(token),
+            parser.pos,
+          ))
+      }
+    }
     Error(e) -> Error(e)
   }
 }
 
 /// Parses a single value at the given indentation level.
-fn parse_value(
+pub fn parse_value(
   parser: Parser,
   min_indent: Int,
 ) -> Result(#(YamlValue, Parser), ParseError) {
-  let parser = skip_newlines_and_comments(parser)
-
+  // Handle newlines and indentation carefully
   case current(parser) {
+    // Skip comments
+    Some(lexer.Comment(_)) -> parse_value(advance(parser), min_indent)
+
+    // Newline means next content is at indent 0
+    // If min_indent > 0, there's no value at the required indent
+    Some(lexer.Newline) -> {
+      let parser = advance(parser)
+      case min_indent > 0 {
+        True -> Ok(#(value.Null, parser))
+        False -> parse_value(parser, min_indent)
+      }
+    }
+
     None -> Ok(#(value.Null, parser))
     Some(lexer.Eof) -> Ok(#(value.Null, parser))
     Some(lexer.DocEnd) -> Ok(#(value.Null, parser))
+    // Another document starting - current document is empty
+    Some(lexer.DocStart) -> Ok(#(value.Null, parser))
 
     // Anchor
     Some(lexer.Anchor(name)) -> {
       let parser = advance(parser) |> skip_spaces
-      case parse_value(parser, min_indent) {
-        Ok(#(val, parser)) -> {
-          let parser =
-            Parser(..parser, anchors: dict.insert(parser.anchors, name, val))
-          Ok(#(val, parser))
+      // Check if this anchor is on a mapping key (scalar followed by colon)
+      case current(parser) {
+        Some(lexer.Plain(s)) -> {
+          let after_plain = advance(parser) |> skip_spaces
+          case current(after_plain) {
+            Some(lexer.Colon) -> {
+              // Anchor is on the key, not the mapping
+              // Register the anchor with the key value, then parse the mapping
+              let parser =
+                Parser(
+                  ..after_plain,
+                  anchors: dict.insert(parser.anchors, name, value.String(s)),
+                )
+              block.parse_block_mapping_from_key(s, advance(parser), min_indent, parse_value)
+            }
+            _ -> {
+              // Not a mapping key, anchor is on the scalar value
+              let parser =
+                Parser(
+                  ..advance(parser),
+                  anchors: dict.insert(parser.anchors, name, parse_scalar(s)),
+                )
+              Ok(#(parse_scalar(s), parser))
+            }
+          }
         }
-        Error(e) -> Error(e)
+        // Handle quoted strings as mapping keys with anchors
+        Some(lexer.SingleQuoted(s)) | Some(lexer.DoubleQuoted(s)) -> {
+          let after_quoted = advance(parser) |> skip_spaces
+          case current(after_quoted) {
+            Some(lexer.Colon) -> {
+              // Anchor is on the key
+              let parser =
+                Parser(
+                  ..after_quoted,
+                  anchors: dict.insert(parser.anchors, name, value.String(s)),
+                )
+              block.parse_block_mapping_from_key(s, advance(parser), min_indent, parse_value)
+            }
+            _ -> {
+              // Not a mapping key, anchor is on the string value
+              let parser =
+                Parser(
+                  ..advance(parser),
+                  anchors: dict.insert(parser.anchors, name, value.String(s)),
+                )
+              Ok(#(value.String(s), parser))
+            }
+          }
+        }
+        _ -> {
+          // Not a scalar, parse normally
+          case parse_value(parser, min_indent) {
+            Ok(#(val, parser)) -> {
+              let parser =
+                Parser(..parser, anchors: dict.insert(parser.anchors, name, val))
+              Ok(#(val, parser))
+            }
+            Error(e) -> Error(e)
+          }
+        }
       }
     }
 
@@ -86,32 +162,133 @@ fn parse_value(
       parse_value(parser, min_indent)
     }
 
-    // Flow sequence
-    Some(lexer.BracketOpen) -> parse_flow_sequence(advance(parser))
+    // Flow sequence - might be a mapping key
+    Some(lexer.BracketOpen) -> {
+      case flow.parse_flow_sequence(advance(parser)) {
+        Ok(#(seq_val, parser)) -> {
+          let parser = skip_spaces(parser)
+          case current(parser) {
+            // Flow sequence used as mapping key
+            Some(lexer.Colon) -> {
+              let key = scalar.value_to_key_string(seq_val)
+              block.parse_block_mapping_from_key(key, advance(parser), min_indent, parse_value)
+            }
+            _ -> Ok(#(seq_val, parser))
+          }
+        }
+        Error(e) -> Error(e)
+      }
+    }
 
-    // Flow mapping
-    Some(lexer.BraceOpen) -> parse_flow_mapping(advance(parser))
+    // Flow mapping - might be a mapping key
+    Some(lexer.BraceOpen) -> {
+      case flow.parse_flow_mapping(advance(parser)) {
+        Ok(#(map_val, parser)) -> {
+          let parser = skip_spaces(parser)
+          case current(parser) {
+            // Flow mapping used as mapping key
+            Some(lexer.Colon) -> {
+              let key = scalar.value_to_key_string(map_val)
+              block.parse_block_mapping_from_key(key, advance(parser), min_indent, parse_value)
+            }
+            _ -> Ok(#(map_val, parser))
+          }
+        }
+        Error(e) -> Error(e)
+      }
+    }
 
     // Block sequence
-    Some(lexer.Dash) -> parse_block_sequence(parser, min_indent)
+    Some(lexer.Dash) -> block.parse_block_sequence(parser, min_indent, parse_value)
+
+    // Explicit mapping key (?)
+    Some(lexer.Question) -> explicit.parse_explicit_mapping(parser, min_indent, parse_value)
+
+    // Empty key mapping (: with no key) OR plain scalar starting with colon
+    Some(lexer.Colon) -> {
+      let after_colon = advance(parser)
+      case current(after_colon) {
+        // Space or newline after colon - it's an empty key mapping
+        Some(lexer.Plain(_))
+        | Some(lexer.SingleQuoted(_))
+        | Some(lexer.DoubleQuoted(_))
+        | Some(lexer.Anchor(_))
+        | Some(lexer.Alias(_))
+        | Some(lexer.Dash)
+        | Some(lexer.BracketOpen)
+        | Some(lexer.BraceOpen)
+        | Some(lexer.Newline)
+        | Some(lexer.Indent(_))
+        | Some(lexer.Comment(_))
+        | Some(lexer.Eof)
+        | None ->
+          block.parse_block_mapping_from_key("", after_colon, min_indent, parse_value)
+        // Non-whitespace after colon - treat as plain scalar starting with :
+        Some(lexer.Colon) | Some(lexer.Comma) | Some(lexer.BracketClose) | Some(lexer.BraceClose) -> {
+          // Collect the rest of the plain scalar
+          let #(rest, parser) = collect_plain_scalar_from_colon(after_colon)
+          Ok(#(parse_scalar(":" <> rest), parser))
+        }
+        // Tags after colon - still a mapping value
+        Some(lexer.Tag(_)) | Some(lexer.Question) | Some(lexer.Literal(_)) | Some(lexer.Folded(_)) | Some(lexer.DocStart) | Some(lexer.DocEnd) ->
+          block.parse_block_mapping_from_key("", after_colon, min_indent, parse_value)
+      }
+    }
 
     // Literal block scalar
-    Some(lexer.Literal) -> parse_literal_block(advance(parser))
+    Some(lexer.Literal(content)) ->
+      Ok(#(value.String(content), advance(parser)))
 
     // Folded block scalar
-    Some(lexer.Folded) -> parse_folded_block(advance(parser))
+    Some(lexer.Folded(content)) -> Ok(#(value.String(content), advance(parser)))
 
     // Scalars
     Some(lexer.Plain(s)) -> {
-      let parser = advance(parser)
+      // Collect the full key (including flow indicators in block context)
+      let #(full_key, parser) = collect_block_plain_key(advance(parser), s)
       // Check if this is a mapping key
       let parser = skip_spaces(parser)
       case current(parser) {
         Some(lexer.Colon) -> {
-          // This is a mapping
-          parse_block_mapping_from_key(s, advance(parser), min_indent)
+          // Check if colon is followed by whitespace (key separator)
+          let after_colon = advance(parser)
+          case current(after_colon) {
+            // Colon followed by these = key separator
+            Some(lexer.Plain(_))
+            | Some(lexer.SingleQuoted(_))
+            | Some(lexer.DoubleQuoted(_))
+            | Some(lexer.Newline)
+            | Some(lexer.Indent(_))
+            | Some(lexer.Eof)
+            | Some(lexer.Comment(_))
+            | Some(lexer.Anchor(_))
+            | Some(lexer.Alias(_))
+            | Some(lexer.Tag(_))
+            | Some(lexer.Dash)
+            | Some(lexer.Question)
+            | Some(lexer.Literal(_))
+            | Some(lexer.Folded(_))
+            | Some(lexer.BracketOpen)
+            | Some(lexer.BraceOpen)
+            | None ->
+              block.parse_block_mapping_from_key(full_key, after_colon, min_indent, parse_value)
+            // Colon followed by non-whitespace = continue collecting
+            _ -> {
+              let #(rest, parser) = collect_block_plain_value(after_colon, full_key <> ":", min_indent)
+              Ok(#(parse_scalar(rest), parser))
+            }
+          }
         }
-        _ -> Ok(#(parse_scalar(s), parser))
+        // Not a mapping key - check for multiline scalar continuation
+        Some(lexer.Newline) -> {
+          let #(full_value, parser) = check_multiline_continuation(advance(parser), full_key, min_indent)
+          Ok(#(parse_scalar(full_value), parser))
+        }
+        Some(lexer.Indent(n)) if n >= min_indent -> {
+          let #(full_value, parser) = collect_block_plain_value(parser, full_key, min_indent)
+          Ok(#(parse_scalar(full_value), parser))
+        }
+        _ -> Ok(#(parse_scalar(full_key), parser))
       }
     }
 
@@ -119,7 +296,7 @@ fn parse_value(
       let parser = advance(parser) |> skip_spaces
       case current(parser) {
         Some(lexer.Colon) ->
-          parse_block_mapping_from_key(s, advance(parser), min_indent)
+          block.parse_block_mapping_from_key(s, advance(parser), min_indent, parse_value)
         _ -> Ok(#(value.String(s), parser))
       }
     }
@@ -128,7 +305,7 @@ fn parse_value(
       let parser = advance(parser) |> skip_spaces
       case current(parser) {
         Some(lexer.Colon) ->
-          parse_block_mapping_from_key(s, advance(parser), min_indent)
+          block.parse_block_mapping_from_key(s, advance(parser), min_indent, parse_value)
         _ -> Ok(#(value.String(s), parser))
       }
     }
@@ -148,461 +325,231 @@ fn parse_value(
   }
 }
 
-fn parse_flow_sequence(parser: Parser) -> Result(#(YamlValue, Parser), ParseError) {
-  parse_flow_sequence_items(skip_whitespace(parser), [])
-}
-
-fn parse_flow_sequence_items(
-  parser: Parser,
-  acc: List(YamlValue),
-) -> Result(#(YamlValue, Parser), ParseError) {
-  let parser = skip_whitespace(parser)
-
+/// Collect the rest of a plain scalar that starts with a colon.
+fn collect_plain_scalar_from_colon(parser: Parser) -> #(String, Parser) {
   case current(parser) {
-    Some(lexer.BracketClose) ->
-      Ok(#(value.Sequence(list.reverse(acc)), advance(parser)))
-    Some(lexer.Eof) -> Error(ParseError("Unterminated flow sequence", parser.pos))
-    None -> Error(ParseError("Unterminated flow sequence", parser.pos))
-    _ -> {
-      case parse_flow_value(parser) {
-        Ok(#(val, parser)) -> {
-          let parser = skip_whitespace(parser)
-          case current(parser) {
-            Some(lexer.Comma) ->
-              parse_flow_sequence_items(advance(parser), [val, ..acc])
-            Some(lexer.BracketClose) ->
-              Ok(#(value.Sequence(list.reverse([val, ..acc])), advance(parser)))
-            _ -> Error(ParseError("Expected ',' or ']'", parser.pos))
-          }
-        }
-        Error(e) -> Error(e)
-      }
+    Some(lexer.Colon) -> {
+      let #(rest, parser) = collect_plain_scalar_from_colon(advance(parser))
+      #(":" <> rest, parser)
     }
+    Some(lexer.Comma) -> {
+      let #(rest, parser) = collect_plain_scalar_from_colon(advance(parser))
+      #("," <> rest, parser)
+    }
+    Some(lexer.Plain(s)) -> {
+      let #(rest, parser) = collect_plain_scalar_from_colon(advance(parser))
+      #(s <> rest, parser)
+    }
+    // Stop at whitespace, newlines, or end
+    _ -> #("", parser)
   }
 }
 
-fn parse_flow_mapping(parser: Parser) -> Result(#(YamlValue, Parser), ParseError) {
-  parse_flow_mapping_pairs(skip_whitespace(parser), dict.new())
-}
-
-fn parse_flow_mapping_pairs(
-  parser: Parser,
-  acc: Dict(String, YamlValue),
-) -> Result(#(YamlValue, Parser), ParseError) {
-  let parser = skip_whitespace(parser)
-
+/// Collect a block plain key (including flow indicators which are plain text in block context).
+/// Stops when we see a colon (potential key separator) or whitespace.
+fn collect_block_plain_key(parser: Parser, acc: String) -> #(String, Parser) {
   case current(parser) {
-    Some(lexer.BraceClose) -> Ok(#(value.Mapping(acc), advance(parser)))
-    Some(lexer.Eof) -> Error(ParseError("Unterminated flow mapping", parser.pos))
-    None -> Error(ParseError("Unterminated flow mapping", parser.pos))
-    _ -> {
-      case parse_flow_key(parser) {
-        Ok(#(key, parser)) -> {
-          let parser = skip_whitespace(parser)
-          case current(parser) {
-            Some(lexer.Colon) -> {
-              let parser = skip_whitespace(advance(parser))
-              case parse_flow_value(parser) {
-                Ok(#(val, parser)) -> {
-                  let acc = dict.insert(acc, key, val)
-                  let parser = skip_whitespace(parser)
-                  case current(parser) {
-                    Some(lexer.Comma) ->
-                      parse_flow_mapping_pairs(advance(parser), acc)
-                    Some(lexer.BraceClose) ->
-                      Ok(#(value.Mapping(acc), advance(parser)))
-                    _ -> Error(ParseError("Expected ',' or '}'", parser.pos))
-                  }
-                }
-                Error(e) -> Error(e)
-              }
-            }
-            _ -> Error(ParseError("Expected ':'", parser.pos))
-          }
-        }
-        Error(e) -> Error(e)
+    // Flow indicators in block context are part of the key
+    Some(lexer.Comma) -> collect_block_plain_key(advance(parser), acc <> ",")
+    Some(lexer.BracketOpen) -> collect_block_plain_key(advance(parser), acc <> "[")
+    Some(lexer.BracketClose) -> collect_block_plain_key(advance(parser), acc <> "]")
+    Some(lexer.BraceOpen) -> collect_block_plain_key(advance(parser), acc <> "{")
+    Some(lexer.BraceClose) -> collect_block_plain_key(advance(parser), acc <> "}")
+    // Colon might be part of the key or the separator - return to caller to decide
+    Some(lexer.Colon) -> {
+      // Look ahead: if followed by closing flow indicators or another colon immediately, it's part of the key
+      let after_colon = advance(parser)
+      case current(after_colon) {
+        // Colon followed by closing indicators or another colon - part of the key
+        Some(lexer.BracketClose)
+        | Some(lexer.BraceClose)
+        | Some(lexer.Colon)
+        | Some(lexer.Comma) ->
+          collect_block_plain_key(after_colon, acc <> ":")
+        // Otherwise, the colon is the key separator
+        // This includes colon followed by space, opening brackets (values), etc.
+        _ -> #(acc, parser)
       }
     }
+    // Plain scalar continuation (adjacent to previous token)
+    Some(lexer.Plain(s)) -> collect_block_plain_key(advance(parser), acc <> s)
+    // Key is complete
+    _ -> #(acc, parser)
   }
 }
 
-fn parse_flow_key(parser: Parser) -> Result(#(String, Parser), ParseError) {
+/// Collect a block plain value (including flow indicators which are plain text in block context).
+/// Supports multiline plain scalars where continuation lines are indented >= min_indent.
+fn collect_block_plain_value(parser: Parser, acc: String, min_indent: Int) -> #(String, Parser) {
   case current(parser) {
-    Some(lexer.Plain(s)) -> Ok(#(s, advance(parser)))
-    Some(lexer.SingleQuoted(s)) -> Ok(#(s, advance(parser)))
-    Some(lexer.DoubleQuoted(s)) -> Ok(#(s, advance(parser)))
-    _ -> Error(ParseError("Expected mapping key", parser.pos))
-  }
-}
-
-fn parse_flow_value(parser: Parser) -> Result(#(YamlValue, Parser), ParseError) {
-  let parser = skip_whitespace(parser)
-
-  case current(parser) {
-    Some(lexer.BracketOpen) -> parse_flow_sequence(advance(parser))
-    Some(lexer.BraceOpen) -> parse_flow_mapping(advance(parser))
-    Some(lexer.Plain(s)) -> Ok(#(parse_scalar(s), advance(parser)))
-    Some(lexer.SingleQuoted(s)) -> Ok(#(value.String(s), advance(parser)))
-    Some(lexer.DoubleQuoted(s)) -> Ok(#(value.String(s), advance(parser)))
-    Some(lexer.Anchor(name)) -> {
-      let parser = advance(parser) |> skip_whitespace
-      case parse_flow_value(parser) {
-        Ok(#(val, parser)) -> {
-          let parser =
-            Parser(..parser, anchors: dict.insert(parser.anchors, name, val))
-          Ok(#(val, parser))
-        }
-        Error(e) -> Error(e)
+    // Flow indicators in block context are part of the value
+    Some(lexer.Comma) -> collect_block_plain_value(advance(parser), acc <> ",", min_indent)
+    Some(lexer.BracketOpen) -> collect_block_plain_value(advance(parser), acc <> "[", min_indent)
+    Some(lexer.BracketClose) -> collect_block_plain_value(advance(parser), acc <> "]", min_indent)
+    Some(lexer.BraceOpen) -> collect_block_plain_value(advance(parser), acc <> "{", min_indent)
+    Some(lexer.BraceClose) -> collect_block_plain_value(advance(parser), acc <> "}", min_indent)
+    Some(lexer.Colon) -> collect_block_plain_value(advance(parser), acc <> ":", min_indent)
+    // Plain scalar continuation on same line
+    Some(lexer.Plain(s)) -> collect_block_plain_value(advance(parser), acc <> " " <> s, min_indent)
+    // Tag in plain scalar context - treat as literal text
+    Some(lexer.Tag(s)) -> collect_block_plain_value(advance(parser), acc <> " " <> s, min_indent)
+    // Anchor in plain scalar context - treat as literal text
+    Some(lexer.Anchor(s)) -> collect_block_plain_value(advance(parser), acc <> " &" <> s, min_indent)
+    // Newline - check for multiline continuation
+    // If followed by Indent, it's a blank line (add \n)
+    // If followed by Plain (at indent 0), it's a normal line break
+    Some(lexer.Newline) -> {
+      let after_newline = advance(parser)
+      case current(after_newline) {
+        // Newline followed by Indent = blank line
+        Some(lexer.Indent(_)) ->
+          check_multiline_continuation(after_newline, acc <> "\n", min_indent)
+        // Otherwise, normal line break
+        _ -> check_multiline_continuation(after_newline, acc, min_indent)
       }
     }
-    Some(lexer.Alias(name)) -> {
-      let parser = advance(parser)
-      case dict.get(parser.anchors, name) {
-        Ok(val) -> Ok(#(val, parser))
-        Error(_) -> Error(ParseError("Unknown anchor: " <> name, parser.pos))
-      }
-    }
-    _ -> Ok(#(value.Null, parser))
-  }
-}
-
-fn parse_block_sequence(
-  parser: Parser,
-  min_indent: Int,
-) -> Result(#(YamlValue, Parser), ParseError) {
-  parse_block_sequence_items(parser, min_indent, [])
-}
-
-fn parse_block_sequence_items(
-  parser: Parser,
-  min_indent: Int,
-  acc: List(YamlValue),
-) -> Result(#(YamlValue, Parser), ParseError) {
-  let parser = skip_newlines_and_comments(parser)
-
-  case current(parser) {
-    Some(lexer.Dash) -> {
-      let parser = advance(parser) |> skip_spaces
-      case parse_value(parser, min_indent + 1) {
-        Ok(#(val, parser)) -> {
-          parse_block_sequence_items(parser, min_indent, [val, ..acc])
-        }
-        Error(e) -> Error(e)
-      }
-    }
+    // Indented line - check if it's a continuation
     Some(lexer.Indent(n)) if n >= min_indent -> {
-      let parser = advance(parser)
-      case current(parser) {
-        Some(lexer.Dash) -> {
-          let parser = advance(parser) |> skip_spaces
-          case parse_value(parser, n + 1) {
-            Ok(#(val, parser)) -> {
-              parse_block_sequence_items(parser, min_indent, [val, ..acc])
+      let after_indent = advance(parser)
+      case current(after_indent) {
+        // Stop at indicators that start new structures
+        Some(lexer.Dash) | Some(lexer.Question) | Some(lexer.Colon) ->
+          #(acc, parser)
+        // Comment after indent ends the scalar
+        Some(lexer.Comment(_)) -> #(acc, parser)
+        // Another Indent = blank line with leading spaces, add \n and continue
+        Some(lexer.Indent(m)) if m >= min_indent ->
+          collect_block_plain_value(after_indent, acc <> "\n", min_indent)
+        // Plain text - check if it's a mapping key
+        Some(lexer.Plain(s)) -> {
+          case is_mapping_key(after_indent) {
+            True -> #(acc, parser)
+            False -> {
+              // After blank line (acc ends with \n), don't add space
+              let sep = case string.ends_with(acc, "\n") {
+                True -> ""
+                False -> " "
+              }
+              collect_block_plain_value(advance(after_indent), acc <> sep <> s, min_indent)
             }
-            Error(e) -> Error(e)
           }
         }
-        _ -> Ok(#(value.Sequence(list.reverse(acc)), parser))
+        // Tag at start of continuation line - treat as plain text
+        Some(lexer.Tag(s)) -> {
+          let sep = case string.ends_with(acc, "\n") {
+            True -> ""
+            False -> " "
+          }
+          collect_block_plain_value(advance(after_indent), acc <> sep <> s, min_indent)
+        }
+        // Anchor at start of continuation line - treat as plain text
+        Some(lexer.Anchor(s)) -> {
+          let sep = case string.ends_with(acc, "\n") {
+            True -> ""
+            False -> " "
+          }
+          collect_block_plain_value(advance(after_indent), acc <> sep <> "&" <> s, min_indent)
+        }
+        // Other tokens end the scalar
+        _ -> #(acc, parser)
       }
     }
-    _ -> Ok(#(value.Sequence(list.reverse(acc)), parser))
+    // Value is complete
+    _ -> #(acc, parser)
   }
 }
 
-fn parse_block_mapping_from_key(
-  first_key: String,
-  parser: Parser,
-  min_indent: Int,
-) -> Result(#(YamlValue, Parser), ParseError) {
-  let parser = skip_spaces(parser)
-
-  // Parse the first value
-  case parse_value(parser, min_indent + 1) {
-    Ok(#(first_val, parser)) -> {
-      let initial = dict.from_list([#(first_key, first_val)])
-      parse_block_mapping_pairs(parser, min_indent, initial)
-    }
-    Error(e) -> Error(e)
-  }
-}
-
-fn parse_block_mapping_pairs(
-  parser: Parser,
-  min_indent: Int,
-  acc: Dict(String, YamlValue),
-) -> Result(#(YamlValue, Parser), ParseError) {
-  let parser = skip_newlines_and_comments(parser)
-
+/// Check for multiline continuation after a newline (at indent 0).
+fn check_multiline_continuation(parser: Parser, acc: String, min_indent: Int) -> #(String, Parser) {
   case current(parser) {
+    // Another newline means a blank line - preserve as literal newline
+    Some(lexer.Newline) -> {
+      check_multiline_continuation(advance(parser), acc <> "\n", min_indent)
+    }
+    // Indent token after newline
     Some(lexer.Indent(n)) if n >= min_indent -> {
-      let parser = advance(parser)
-      case parse_mapping_key(parser) {
-        Ok(#(key, parser)) -> {
-          let parser = skip_spaces(parser)
-          case current(parser) {
-            Some(lexer.Colon) -> {
-              let parser = advance(parser) |> skip_spaces
-              case parse_value(parser, n + 1) {
-                Ok(#(val, parser)) -> {
-                  let acc = dict.insert(acc, key, val)
-                  parse_block_mapping_pairs(parser, min_indent, acc)
-                }
-                Error(e) -> Error(e)
+      let after_indent = advance(parser)
+      case current(after_indent) {
+        // Stop at indicators that start new structures
+        Some(lexer.Dash) | Some(lexer.Question) | Some(lexer.Colon) ->
+          #(acc, Parser(..parser, pos: parser.pos - 1))
+        // Comment ends the scalar
+        Some(lexer.Comment(_)) -> #(acc, Parser(..parser, pos: parser.pos - 1))
+        // Another newline - blank line with indent (treat indent as part of blank line)
+        Some(lexer.Newline) ->
+          check_multiline_continuation(advance(after_indent), acc <> "\n", min_indent)
+        // Plain text - check if it's a mapping key (followed by colon)
+        Some(lexer.Plain(s)) -> {
+          // Look ahead to see if this plain is followed by colon (making it a mapping key)
+          case is_mapping_key(after_indent) {
+            True -> #(acc, Parser(..parser, pos: parser.pos - 1))
+            False -> {
+              // After a blank line (acc ends with \n), don't add extra space
+              let sep = case string.ends_with(acc, "\n") {
+                True -> ""
+                False -> " "
               }
-            }
-            _ -> Ok(#(value.Mapping(acc), parser))
-          }
-        }
-        Error(_) -> Ok(#(value.Mapping(acc), parser))
-      }
-    }
-    Some(lexer.Plain(s)) -> {
-      // Same-line continuation
-      let parser = advance(parser) |> skip_spaces
-      case current(parser) {
-        Some(lexer.Colon) -> {
-          let parser = advance(parser) |> skip_spaces
-          case parse_value(parser, min_indent + 1) {
-            Ok(#(val, parser)) -> {
-              let acc = dict.insert(acc, s, val)
-              parse_block_mapping_pairs(parser, min_indent, acc)
-            }
-            Error(e) -> Error(e)
-          }
-        }
-        _ -> Ok(#(value.Mapping(acc), parser))
-      }
-    }
-    _ -> Ok(#(value.Mapping(acc), parser))
-  }
-}
-
-fn parse_mapping_key(parser: Parser) -> Result(#(String, Parser), ParseError) {
-  case current(parser) {
-    Some(lexer.Plain(s)) -> Ok(#(s, advance(parser)))
-    Some(lexer.SingleQuoted(s)) -> Ok(#(s, advance(parser)))
-    Some(lexer.DoubleQuoted(s)) -> Ok(#(s, advance(parser)))
-    _ -> Error(ParseError("Expected mapping key", parser.pos))
-  }
-}
-
-fn parse_literal_block(parser: Parser) -> Result(#(YamlValue, Parser), ParseError) {
-  // Skip to newline
-  let parser = skip_to_newline(parser)
-  let parser = skip_newline(parser)
-
-  // Determine block indent
-  case current(parser) {
-    Some(lexer.Indent(block_indent)) -> {
-      let parser = advance(parser)
-      parse_literal_lines(parser, block_indent, "")
-    }
-    _ -> Ok(#(value.String(""), parser))
-  }
-}
-
-fn parse_literal_lines(
-  parser: Parser,
-  block_indent: Int,
-  acc: String,
-) -> Result(#(YamlValue, Parser), ParseError) {
-  case current(parser) {
-    Some(lexer.Plain(s)) -> {
-      let line = case acc {
-        "" -> s
-        _ -> acc <> "\n" <> s
-      }
-      let parser = advance(parser)
-      parse_literal_after_line(parser, block_indent, line)
-    }
-    Some(lexer.Newline) -> {
-      let line = case acc {
-        "" -> ""
-        _ -> acc <> "\n"
-      }
-      parse_literal_after_line(advance(parser), block_indent, line)
-    }
-    _ -> Ok(#(value.String(acc), parser))
-  }
-}
-
-fn parse_literal_after_line(
-  parser: Parser,
-  block_indent: Int,
-  acc: String,
-) -> Result(#(YamlValue, Parser), ParseError) {
-  case current(parser) {
-    Some(lexer.Newline) -> {
-      parse_literal_lines(advance(parser), block_indent, acc <> "\n")
-    }
-    Some(lexer.Indent(n)) if n >= block_indent -> {
-      let parser = advance(parser)
-      parse_literal_lines(parser, block_indent, acc)
-    }
-    _ -> Ok(#(value.String(acc), parser))
-  }
-}
-
-fn parse_folded_block(parser: Parser) -> Result(#(YamlValue, Parser), ParseError) {
-  // Skip to newline
-  let parser = skip_to_newline(parser)
-  let parser = skip_newline(parser)
-
-  // Determine block indent
-  case current(parser) {
-    Some(lexer.Indent(block_indent)) -> {
-      let parser = advance(parser)
-      parse_folded_lines(parser, block_indent, "", False)
-    }
-    _ -> Ok(#(value.String(""), parser))
-  }
-}
-
-fn parse_folded_lines(
-  parser: Parser,
-  block_indent: Int,
-  acc: String,
-  had_blank: Bool,
-) -> Result(#(YamlValue, Parser), ParseError) {
-  case current(parser) {
-    Some(lexer.Plain(s)) -> {
-      let line = case acc, had_blank {
-        "", _ -> s
-        _, True -> acc <> "\n\n" <> s
-        _, False -> acc <> " " <> s
-      }
-      let parser = advance(parser)
-      parse_folded_after_line(parser, block_indent, line)
-    }
-    Some(lexer.Newline) -> {
-      parse_folded_after_line(advance(parser), block_indent, acc)
-    }
-    _ -> Ok(#(value.String(acc), parser))
-  }
-}
-
-fn parse_folded_after_line(
-  parser: Parser,
-  block_indent: Int,
-  acc: String,
-) -> Result(#(YamlValue, Parser), ParseError) {
-  case current(parser) {
-    Some(lexer.Newline) -> {
-      parse_folded_lines(advance(parser), block_indent, acc, True)
-    }
-    Some(lexer.Indent(n)) if n >= block_indent -> {
-      let parser = advance(parser)
-      parse_folded_lines(parser, block_indent, acc, False)
-    }
-    _ -> Ok(#(value.String(acc), parser))
-  }
-}
-
-/// Parse a plain scalar into typed value.
-fn parse_scalar(s: String) -> YamlValue {
-  let trimmed = string.trim(s)
-
-  case string.lowercase(trimmed) {
-    // Null
-    "null" | "~" | "" -> value.Null
-    // Boolean
-    "true" | "yes" | "on" -> value.Bool(True)
-    "false" | "no" | "off" -> value.Bool(False)
-    // Try numeric
-    _ -> {
-      case int.parse(trimmed) {
-        Ok(i) -> value.Int(i)
-        Error(_) -> {
-          case float.parse(trimmed) {
-            Ok(f) -> value.Float(f)
-            Error(_) -> {
-              // Special floats
-              case trimmed {
-                ".inf" | ".Inf" | ".INF" -> value.Float(1.0 /. 0.0)
-                "-.inf" | "-.Inf" | "-.INF" -> value.Float(-1.0 /. 0.0)
-                ".nan" | ".NaN" | ".NAN" -> value.Float(0.0 /. 0.0)
-                _ -> value.String(s)
-              }
+              collect_block_plain_value(advance(after_indent), acc <> sep <> s, min_indent)
             }
           }
         }
+        // Tag at start of continuation line - treat as plain text (not a real tag)
+        Some(lexer.Tag(s)) -> {
+          let sep = case string.ends_with(acc, "\n") {
+            True -> ""
+            False -> " "
+          }
+          collect_block_plain_value(advance(after_indent), acc <> sep <> s, min_indent)
+        }
+        // Anchor at start of continuation line - treat as plain text (not a real anchor)
+        Some(lexer.Anchor(s)) -> {
+          let sep = case string.ends_with(acc, "\n") {
+            True -> ""
+            False -> " "
+          }
+          collect_block_plain_value(advance(after_indent), acc <> sep <> "&" <> s, min_indent)
+        }
+        // Quoted strings followed by colon are mapping keys
+        Some(lexer.SingleQuoted(_)) | Some(lexer.DoubleQuoted(_)) -> {
+          case is_mapping_key(after_indent) {
+            True -> #(acc, Parser(..parser, pos: parser.pos - 1))
+            False -> #(acc, Parser(..parser, pos: parser.pos - 1))
+          }
+        }
+        // Other tokens end the scalar
+        _ -> #(acc, Parser(..parser, pos: parser.pos - 1))
       }
     }
+    // Content at indent 0 (no Indent token) - only continue if min_indent == 0
+    Some(lexer.Plain(s)) if min_indent == 0 -> {
+      // Check if it's a mapping key
+      case is_mapping_key(parser) {
+        True -> #(acc, Parser(..parser, pos: parser.pos - 1))
+        False -> {
+          let sep = case string.ends_with(acc, "\n") {
+            True -> ""
+            False -> " "
+          }
+          collect_block_plain_value(advance(parser), acc <> sep <> s, min_indent)
+        }
+      }
+    }
+    // Insufficient indent or no indent - scalar ends
+    _ -> #(acc, Parser(..parser, pos: parser.pos - 1))
   }
 }
 
-// Helper functions
-
-fn current(parser: Parser) -> Option(Token) {
-  list.drop(parser.tokens, parser.pos)
-  |> list.first
-  |> option.from_result
-}
-
-fn advance(parser: Parser) -> Parser {
-  Parser(..parser, pos: parser.pos + 1)
-}
-
-fn skip_spaces(parser: Parser) -> Parser {
-  // Spaces are already consumed by lexer, this is for inline whitespace
-  parser
-}
-
-fn skip_whitespace(parser: Parser) -> Parser {
+/// Check if the current position starts a mapping key (scalar followed by colon).
+fn is_mapping_key(parser: Parser) -> Bool {
   case current(parser) {
-    Some(lexer.Newline) -> skip_whitespace(advance(parser))
-    Some(lexer.Indent(_)) -> skip_whitespace(advance(parser))
-    Some(lexer.Comment(_)) -> skip_whitespace(advance(parser))
-    _ -> parser
-  }
-}
-
-fn skip_newlines_and_comments(parser: Parser) -> Parser {
-  case current(parser) {
-    Some(lexer.Newline) -> skip_newlines_and_comments(advance(parser))
-    Some(lexer.Comment(_)) -> skip_newlines_and_comments(advance(parser))
-    _ -> parser
-  }
-}
-
-fn skip_to_newline(parser: Parser) -> Parser {
-  case current(parser) {
-    Some(lexer.Newline) -> parser
-    Some(lexer.Eof) -> parser
-    None -> parser
-    _ -> skip_to_newline(advance(parser))
-  }
-}
-
-fn skip_newline(parser: Parser) -> Parser {
-  case current(parser) {
-    Some(lexer.Newline) -> advance(parser)
-    _ -> parser
-  }
-}
-
-fn token_to_string(token: Token) -> String {
-  case token {
-    lexer.DocStart -> "---"
-    lexer.DocEnd -> "..."
-    lexer.Colon -> ":"
-    lexer.Dash -> "-"
-    lexer.BracketOpen -> "["
-    lexer.BracketClose -> "]"
-    lexer.BraceOpen -> "{"
-    lexer.BraceClose -> "}"
-    lexer.Comma -> ","
-    lexer.Anchor(n) -> "&" <> n
-    lexer.Alias(n) -> "*" <> n
-    lexer.Tag(t) -> t
-    lexer.Literal -> "|"
-    lexer.Folded -> ">"
-    lexer.Plain(s) -> "plain(" <> s <> ")"
-    lexer.SingleQuoted(s) -> "'" <> s <> "'"
-    lexer.DoubleQuoted(s) -> "\"" <> s <> "\""
-    lexer.Comment(c) -> "#" <> c
-    lexer.Newline -> "\\n"
-    lexer.Indent(n) -> "indent(" <> int.to_string(n) <> ")"
-    lexer.Eof -> "EOF"
+    Some(lexer.Plain(_)) | Some(lexer.SingleQuoted(_)) | Some(lexer.DoubleQuoted(_)) -> {
+      // Advance past the scalar and check for colon
+      let after_scalar = advance(parser)
+      case current(after_scalar) {
+        Some(lexer.Colon) -> True
+        _ -> False
+      }
+    }
+    _ -> False
   }
 }
