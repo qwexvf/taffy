@@ -680,6 +680,8 @@ fn is_key_terminator(token: Option(lexer.Token)) -> Bool {
     | Some(lexer.Question)
     | Some(lexer.Literal(_))
     | Some(lexer.Folded(_)) -> True
+    // Flow collection starts after colon indicate the colon is a key separator
+    Some(lexer.BraceOpen) | Some(lexer.BracketOpen) -> True
     None -> True
     _ -> False
   }
