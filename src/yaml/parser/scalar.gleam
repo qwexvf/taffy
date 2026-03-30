@@ -19,24 +19,56 @@ pub fn parse_scalar(s: String) -> YamlValue {
     "false" | "no" | "off" -> value.Bool(False)
     // Try numeric
     _ -> {
-      case int.parse(trimmed) {
+      // Try hexadecimal (0x prefix)
+      case try_parse_hex(trimmed) {
         Ok(i) -> value.Int(i)
-        Error(_) -> {
-          case float.parse(trimmed) {
-            Ok(f) -> value.Float(f)
-            Error(_) -> {
-              // Special floats
-              case trimmed {
-                ".inf" | ".Inf" | ".INF" -> value.Float(1.0 /. 0.0)
-                "-.inf" | "-.Inf" | "-.INF" -> value.Float(-1.0 /. 0.0)
-                ".nan" | ".NaN" | ".NAN" -> value.Float(0.0 /. 0.0)
-                _ -> value.String(s)
+        Error(_) ->
+          // Try octal (0o prefix)
+          case try_parse_octal(trimmed) {
+            Ok(i) -> value.Int(i)
+            Error(_) ->
+              case int.parse(trimmed) {
+                Ok(i) -> value.Int(i)
+                Error(_) -> {
+                  case float.parse(trimmed) {
+                    Ok(f) -> value.Float(f)
+                    Error(_) -> {
+                      // Special floats
+                      case trimmed {
+                        ".inf" | ".Inf" | ".INF" -> value.Float(1.0 /. 0.0)
+                        "-.inf" | "-.Inf" | "-.INF" -> value.Float(-1.0 /. 0.0)
+                        ".nan" | ".NaN" | ".NAN" -> value.Float(0.0 /. 0.0)
+                        _ -> value.String(trimmed)
+                      }
+                    }
+                  }
+                }
               }
-            }
           }
-        }
       }
     }
+  }
+}
+
+/// Try to parse a hexadecimal number (0x prefix).
+fn try_parse_hex(s: String) -> Result(Int, Nil) {
+  case string.starts_with(string.lowercase(s), "0x") {
+    True -> {
+      let hex_part = string.drop_start(s, 2)
+      int.base_parse(hex_part, 16)
+    }
+    False -> Error(Nil)
+  }
+}
+
+/// Try to parse an octal number (0o prefix).
+fn try_parse_octal(s: String) -> Result(Int, Nil) {
+  case string.starts_with(string.lowercase(s), "0o") {
+    True -> {
+      let oct_part = string.drop_start(s, 2)
+      int.base_parse(oct_part, 8)
+    }
+    False -> Error(Nil)
   }
 }
 

@@ -10,7 +10,7 @@ import yaml/parser/flow
 import yaml/parser/helpers.{
   advance, current, skip_newlines_and_comments, skip_spaces, token_to_string,
 }
-import yaml/parser/scalar.{parse_scalar}
+import yaml/parser/scalar
 import yaml/parser/types.{type ParseError, type Parser, ParseError, Parser}
 import yaml/value.{type YamlValue}
 
@@ -108,9 +108,9 @@ pub fn parse_value(
               let parser =
                 Parser(
                   ..advance(parser),
-                  anchors: dict.insert(parser.anchors, name, parse_scalar(s)),
+                  anchors: dict.insert(parser.anchors, name, scalar.parse_scalar(s)),
                 )
-              Ok(#(parse_scalar(s), parser))
+              Ok(#(scalar.parse_scalar(s), parser))
             }
           }
         }
@@ -160,19 +160,61 @@ pub fn parse_value(
       }
     }
 
-    // Alias
+    // Alias - might be a value or a mapping key
     Some(lexer.Alias(name)) -> {
-      let parser = advance(parser)
+      let parser = advance(parser) |> skip_spaces
       case dict.get(parser.anchors, name) {
-        Ok(val) -> Ok(#(val, parser))
+        Ok(alias_val) -> {
+          // Check if this alias is used as a mapping key
+          case current(parser) {
+            Some(lexer.Colon) -> {
+              // Alias is a mapping key
+              let key = scalar.value_to_key_string(alias_val)
+              block.parse_block_mapping_from_key(
+                key,
+                advance(parser),
+                min_indent,
+                parse_value,
+              )
+            }
+            _ -> Ok(#(alias_val, parser))
+          }
+        }
         Error(_) -> Error(ParseError("Unknown anchor: " <> name, parser.pos))
       }
     }
 
-    // Skip tags for now
-    Some(lexer.Tag(_)) -> {
+    // Handle tags - check if it's a string tag with truly no value
+    Some(lexer.Tag(tag)) -> {
       let parser = advance(parser) |> skip_spaces
-      parse_value(parser, min_indent)
+      let is_str_tag =
+        tag == "!!str" || string.contains(tag, "tag:yaml.org,2002:str")
+      // Non-specific tag `!` means "don't do type resolution" (keep as string)
+      let is_non_specific = tag == "!"
+      case current(parser), is_str_tag, is_non_specific {
+        // String tag at end of input = empty string
+        Some(lexer.Eof), True, _ | None, True, _ ->
+          Ok(#(value.String(""), parser))
+        // String tag followed by newline, check if value continues
+        Some(lexer.Newline), True, _ -> {
+          let after_newline = advance(parser)
+          case current(after_newline) {
+            // End of input or document marker after newline = empty string
+            Some(lexer.Eof) | None | Some(lexer.DocStart) | Some(lexer.DocEnd) ->
+              Ok(#(value.String(""), parser))
+            // Dash at indent 0 means new sequence item, so this value is empty
+            Some(lexer.Dash) -> Ok(#(value.String(""), parser))
+            // Content continues on next line, parse normally
+            _ -> parse_value(parser, min_indent)
+          }
+        }
+        // Non-specific tag followed by plain scalar - keep as string
+        Some(lexer.Plain(s)), _, True -> {
+          Ok(#(value.String(string.trim(s)), advance(parser)))
+        }
+        // Otherwise, parse the value normally
+        _, _, _ -> parse_value(parser, min_indent)
+      }
     }
 
     // Flow sequence - might be a mapping key
@@ -260,7 +302,7 @@ pub fn parse_value(
         | Some(lexer.BraceClose) -> {
           // Collect the rest of the plain scalar
           let #(rest, parser) = collect_plain_scalar_from_colon(after_colon)
-          Ok(#(parse_scalar(":" <> rest), parser))
+          Ok(#(scalar.parse_scalar(":" <> rest), parser))
         }
         // Tags after colon - still a mapping value
         Some(lexer.Tag(_))
@@ -328,22 +370,32 @@ pub fn parse_value(
                   full_key <> ":",
                   min_indent,
                 )
-              Ok(#(parse_scalar(rest), parser))
+              Ok(#(scalar.parse_scalar(rest), parser))
             }
           }
         }
         // Not a mapping key - check for multiline scalar continuation
         Some(lexer.Newline) -> {
+          // A Newline token followed by Indent means there was a blank line
+          // (the Newline came from a line with only whitespace)
+          // We need to preserve this as \n in the scalar
+          let after_newline = advance(parser)
+          let acc = case current(after_newline) {
+            // Blank line before indented content - preserve newline
+            Some(lexer.Indent(_)) -> full_key <> "\n"
+            // Regular line break - will be folded to space
+            _ -> full_key
+          }
           let #(full_value, parser) =
-            check_multiline_continuation(advance(parser), full_key, min_indent)
-          Ok(#(parse_scalar(full_value), parser))
+            check_multiline_continuation(after_newline, acc, min_indent)
+          Ok(#(scalar.parse_scalar(full_value), parser))
         }
         Some(lexer.Indent(n)) if n >= min_indent -> {
           let #(full_value, parser) =
             collect_block_plain_value(parser, full_key, min_indent)
-          Ok(#(parse_scalar(full_value), parser))
+          Ok(#(scalar.parse_scalar(full_value), parser))
         }
-        _ -> Ok(#(parse_scalar(full_key), parser))
+        _ -> Ok(#(scalar.parse_scalar(full_key), parser))
       }
     }
 
@@ -493,7 +545,7 @@ fn collect_block_plain_value(
     Some(lexer.Indent(n)) if n >= min_indent -> {
       let after_indent = advance(parser)
       case current(after_indent) {
-        // Stop at indicators that start new structures
+        // Indicators at indent level start new structures - stop collecting
         Some(lexer.Dash) | Some(lexer.Question) | Some(lexer.Colon) -> #(
           acc,
           parser,
