@@ -105,8 +105,23 @@ fn parse_flow_sequence_entry(
       }
     }
 
-    Some(lexer.Tag(_)) ->
-      parse_flow_sequence_entry(advance(parser) |> skip_whitespace)
+    Some(lexer.Tag(tag)) -> {
+      let parser = advance(parser) |> skip_whitespace
+      // Check if this is a string tag with empty content
+      let is_str_tag =
+        tag == "!!str" || string.contains(tag, "tag:yaml.org,2002:str")
+      case current(parser), is_str_tag {
+        // String tag followed by comma, close bracket, or EOF = empty string
+        Some(lexer.Comma), True
+        | Some(lexer.BracketClose), True
+        | Some(lexer.BraceClose), True
+        | Some(lexer.Eof), True
+        | option.None, True
+        -> Ok(#(value.String(""), parser))
+        // Otherwise parse normally
+        _, _ -> parse_flow_sequence_entry(parser)
+      }
+    }
 
     Some(lexer.Colon) -> {
       use #(val, parser) <- result.try(
@@ -474,9 +489,16 @@ pub fn parse_flow_key_with_colon(
         Error(_) -> Error(ParseError("Unknown anchor: " <> name, parser.pos))
       }
     }
-    Some(lexer.Tag(_)) -> {
+    Some(lexer.Tag(tag)) -> {
       let parser = advance(parser) |> skip_whitespace
-      parse_flow_key_with_colon(parser)
+      // Check if this is a string tag with empty content (used as key)
+      let is_str_tag =
+        tag == "!!str" || string.contains(tag, "tag:yaml.org,2002:str")
+      case current(parser), is_str_tag {
+        // String tag followed by colon = empty string key
+        Some(lexer.Colon), True -> Ok(#("", parser))
+        _, _ -> parse_flow_key_with_colon(parser)
+      }
     }
     // Empty key - Colon indicates the key is empty (null)
     Some(lexer.Colon) -> Ok(#("", parser))
@@ -606,10 +628,21 @@ pub fn parse_flow_value(
         Error(_) -> Error(ParseError("Unknown anchor: " <> name, parser.pos))
       }
     }
-    // Skip tags and parse the value
-    Some(lexer.Tag(_)) -> {
+    // Handle tags - check for string tag with empty value
+    Some(lexer.Tag(tag)) -> {
       let parser = advance(parser) |> skip_whitespace
-      parse_flow_value(parser)
+      let is_str_tag =
+        tag == "!!str" || string.contains(tag, "tag:yaml.org,2002:str")
+      case current(parser), is_str_tag {
+        // String tag followed by separator = empty string
+        Some(lexer.Comma), True
+        | Some(lexer.BraceClose), True
+        | Some(lexer.BracketClose), True
+        | Some(lexer.Eof), True
+        | option.None, True
+        -> Ok(#(value.String(""), parser))
+        _, _ -> parse_flow_value(parser)
+      }
     }
     _ -> Ok(#(value.Null, parser))
   }
