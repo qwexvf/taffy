@@ -1,6 +1,6 @@
 //// Block collection parsing (sequences and mappings in block style).
 
-import gleam/dict.{type Dict}
+import gleam/dict
 import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/result
@@ -22,6 +22,11 @@ pub fn parse_block_sequence(
   min_indent: Int,
   parse_value_fn: ParseValueFn,
 ) -> Result(#(YamlValue, Parser), ParseError) {
+  let sei = case min_indent {
+    0 -> Some(0)
+    _ -> None
+  }
+  let parser = Parser(..parser, seq_entry_indent: sei)
   parse_block_sequence_items(parser, min_indent, [], parse_value_fn)
 }
 
@@ -31,43 +36,83 @@ fn parse_block_sequence_items(
   acc: List(YamlValue),
   parse_value_fn: ParseValueFn,
 ) -> Result(#(YamlValue, Parser), ParseError) {
+  parse_block_sequence_items_col(parser, min_indent, None, acc, parse_value_fn)
+}
+
+fn parse_block_sequence_items_col(
+  parser: Parser,
+  min_indent: Int,
+  seq_col: Option(Int),
+  acc: List(YamlValue),
+  parse_value_fn: ParseValueFn,
+) -> Result(#(YamlValue, Parser), ParseError) {
   let parser = skip_newlines_and_comments(parser)
   let is_first_item = list.is_empty(acc)
 
   case current(parser) {
     // Raw Dash at indent 0: valid if first item or min_indent allows it
     Some(lexer.Dash) if is_first_item || min_indent == 0 ->
-      parse_sequence_item(
+      parse_sequence_item_col(
         parser,
         min_indent,
         min_indent + 1,
+        seq_col,
         acc,
         parse_value_fn,
       )
 
-    Some(lexer.Indent(n)) if n >= min_indent -> {
-      let parser = advance(parser)
-      case current(parser) {
-        Some(lexer.Dash) ->
-          parse_sequence_item(parser, min_indent, n + 1, acc, parse_value_fn)
-        _ -> Ok(#(value.Sequence(list.reverse(acc)), parser))
+    Some(lexer.Indent(n)) -> {
+      // Check indent matching for sequences
+      let accepted = case seq_col {
+        Some(col) -> n == col
+        None -> n >= min_indent
+      }
+      case accepted {
+        True -> {
+          let new_col = case seq_col {
+            Some(_) -> seq_col
+            None -> Some(n)
+          }
+          let parser = advance(parser)
+          case current(parser) {
+            Some(lexer.Dash) ->
+              parse_sequence_item_col(
+                parser,
+                min_indent,
+                n + 1,
+                new_col,
+                acc,
+                parse_value_fn,
+              )
+            _ -> Ok(#(value.Sequence(list.reverse(acc)), parser))
+          }
+        }
+        False -> Ok(#(value.Sequence(list.reverse(acc)), parser))
       }
     }
     _ -> Ok(#(value.Sequence(list.reverse(acc)), parser))
   }
 }
 
-/// Parse a single sequence item and continue parsing remaining items.
-fn parse_sequence_item(
+fn parse_sequence_item_col(
   parser: Parser,
   min_indent: Int,
   item_indent: Int,
+  seq_col: Option(Int),
   acc: List(YamlValue),
   parse_value_fn: ParseValueFn,
 ) -> Result(#(YamlValue, Parser), ParseError) {
   let parser = advance(parser) |> skip_spaces
+  let saved_sei = parser.seq_entry_indent
   use #(val, parser) <- result.try(parse_value_fn(parser, item_indent))
-  parse_block_sequence_items(parser, min_indent, [val, ..acc], parse_value_fn)
+  let parser = Parser(..parser, seq_entry_indent: saved_sei)
+  parse_block_sequence_items_col(
+    parser,
+    min_indent,
+    seq_col,
+    [val, ..acc],
+    parse_value_fn,
+  )
 }
 
 /// Parse a block mapping starting from a key that was already parsed.
@@ -82,7 +127,7 @@ pub fn parse_block_mapping_from_key(
   // Use parse_mapping_value to handle all the complex cases (anchors, sequences, etc.)
   case parse_mapping_value(parser, min_indent, parse_value_fn) {
     Ok(#(first_val, parser)) -> {
-      let initial = dict.from_list([#(first_key, first_val)])
+      let initial = [#(first_key, first_val)]
       parse_block_mapping_pairs(parser, min_indent, initial, parse_value_fn)
     }
     Error(e) -> Error(e)
@@ -95,7 +140,12 @@ pub fn parse_mapping_value(
   key_indent: Int,
   parse_value_fn: ParseValueFn,
 ) -> Result(#(YamlValue, Parser), ParseError) {
-  parse_mapping_value_with_anchor(parser, key_indent, None, parse_value_fn)
+  case
+    parse_mapping_value_with_anchor(parser, key_indent, None, parse_value_fn)
+  {
+    Ok(#(val, parser)) -> Ok(#(val, Parser(..parser, in_inline_value: False)))
+    err -> err
+  }
 }
 
 fn parse_mapping_value_with_anchor(
@@ -107,6 +157,15 @@ fn parse_mapping_value_with_anchor(
   case current(parser) {
     Some(lexer.Newline) ->
       parse_mapping_value_after_newline(
+        advance(parser),
+        key_indent,
+        anchor,
+        parse_value_fn,
+      )
+
+    // Comments after key: skip and look for value on next line
+    Some(lexer.Comment(_)) ->
+      parse_mapping_value_with_anchor(
         advance(parser),
         key_indent,
         anchor,
@@ -138,7 +197,16 @@ fn parse_mapping_value_with_anchor(
         parse_value_fn,
       )
 
-    _ -> parse_value_with_anchor(parser, key_indent + 1, anchor, parse_value_fn)
+    Some(lexer.Dash) ->
+      Error(ParseError(
+        "Block sequence not allowed on same line as mapping key",
+        parser.pos,
+      ))
+
+    _ -> {
+      let parser = Parser(..parser, in_inline_value: True)
+      parse_value_with_anchor(parser, key_indent + 1, anchor, parse_value_fn)
+    }
   }
 }
 
@@ -219,6 +287,23 @@ fn parse_mapping_value_after_newline(
         parse_value_fn,
       )
 
+    // Skip comments and newlines, continue looking for value
+    Some(lexer.Comment(_)) ->
+      parse_mapping_value_after_newline(
+        advance(parser),
+        key_indent,
+        anchor,
+        parse_value_fn,
+      )
+
+    Some(lexer.Newline) ->
+      parse_mapping_value_after_newline(
+        advance(parser),
+        key_indent,
+        anchor,
+        parse_value_fn,
+      )
+
     _ -> Ok(#(value.Null, parser))
   }
 }
@@ -231,6 +316,12 @@ fn parse_mapping_value_after_anchor(
   parse_value_fn: ParseValueFn,
 ) -> Result(#(YamlValue, Parser), ParseError) {
   case current(parser) {
+    // Reject anchor followed by alias (can't anchor an alias reference)
+    Some(lexer.Alias(_)) ->
+      Error(ParseError("Cannot place an anchor on an alias", parser.pos))
+    // Reject double anchors
+    Some(lexer.Anchor(_)) ->
+      Error(ParseError("A node can only have one anchor", parser.pos))
     Some(lexer.Newline) ->
       parse_anchored_value_after_newline(
         advance(parser),
@@ -281,6 +372,9 @@ fn parse_anchored_indented_value(
   parse_value_fn: ParseValueFn,
 ) -> Result(#(YamlValue, Parser), ParseError) {
   case current(parser) {
+    // Reject double anchor on same node
+    Some(lexer.Anchor(_)) ->
+      Error(ParseError("A node can only have one anchor", parser.pos))
     Some(lexer.Dash) if indent_level >= key_indent -> {
       let parser = Parser(..parser, pos: parser.pos - 1)
       parse_sequence_and_register_anchor(
@@ -368,28 +462,63 @@ fn wrap_with_anchor(
 fn parse_block_mapping_pairs(
   parser: Parser,
   min_indent: Int,
-  acc: Dict(String, YamlValue),
+  acc: List(#(String, YamlValue)),
+  parse_value_fn: ParseValueFn,
+) -> Result(#(YamlValue, Parser), ParseError) {
+  parse_block_mapping_pairs_col(parser, min_indent, None, acc, parse_value_fn)
+}
+
+fn parse_block_mapping_pairs_col(
+  parser: Parser,
+  min_indent: Int,
+  mapping_col: Option(Int),
+  acc: List(#(String, YamlValue)),
   parse_value_fn: ParseValueFn,
 ) -> Result(#(YamlValue, Parser), ParseError) {
   let parser = skip_newlines_and_comments(parser)
   let done = Ok(#(value.Mapping(acc), parser))
 
   case current(parser) {
-    Some(lexer.Indent(n)) if n >= min_indent ->
-      parse_indented_mapping_pair(
-        advance(parser),
-        min_indent,
-        n,
-        acc,
-        parse_value_fn,
-      )
+    Some(lexer.Indent(n)) -> {
+      // Check indent matching:
+      // - If mapping_col is set, must match exactly
+      // - If min_indent == 0, reject (indent-0 keys come through Newline path)
+      // - Otherwise, n >= min_indent establishes the column
+      let accepted = case mapping_col {
+        Some(col) -> n == col
+        None ->
+          case min_indent {
+            0 -> False
+            _ -> n >= min_indent
+          }
+      }
+      case accepted {
+        True -> {
+          let new_col = case mapping_col {
+            Some(_) -> mapping_col
+            None -> Some(n)
+          }
+          parse_indented_mapping_pair_col(
+            advance(parser),
+            min_indent,
+            n,
+            new_col,
+            acc,
+            parse_value_fn,
+          )
+        }
+        False -> done
+      }
+    }
 
     // Tokens at indent 0 - only valid if min_indent == 0
     Some(lexer.Colon) if min_indent == 0 ->
-      add_key_value_pair(
+      add_key_value_pair_col(
         "",
         advance(parser) |> skip_spaces,
         min_indent,
+        min_indent,
+        Some(0),
         acc,
         parse_value_fn,
       )
@@ -397,32 +526,56 @@ fn parse_block_mapping_pairs(
     Some(lexer.Question) if min_indent == 0 ->
       parse_explicit_key_in_mapping(parser, min_indent, 0, acc, parse_value_fn)
 
-    Some(lexer.Plain(s)) if min_indent == 0 ->
-      try_parse_simple_key(
-        s,
-        advance(parser) |> skip_spaces,
-        min_indent,
-        acc,
-        parse_value_fn,
-      )
+    Some(lexer.Plain(s)) if min_indent == 0 -> {
+      let after_key = advance(parser) |> skip_spaces
+      case current(after_key) {
+        Some(lexer.Colon) ->
+          add_key_value_pair_col(
+            s,
+            advance(after_key) |> skip_spaces,
+            min_indent,
+            min_indent,
+            Some(0),
+            acc,
+            parse_value_fn,
+          )
+        _ -> done
+      }
+    }
 
-    Some(lexer.SingleQuoted(s)) if min_indent == 0 ->
-      try_parse_simple_key(
-        s,
-        advance(parser) |> skip_spaces,
-        min_indent,
-        acc,
-        parse_value_fn,
-      )
+    Some(lexer.SingleQuoted(s)) if min_indent == 0 -> {
+      let after_key = advance(parser) |> skip_spaces
+      case current(after_key) {
+        Some(lexer.Colon) ->
+          add_key_value_pair_col(
+            s,
+            advance(after_key) |> skip_spaces,
+            min_indent,
+            min_indent,
+            Some(0),
+            acc,
+            parse_value_fn,
+          )
+        _ -> done
+      }
+    }
 
-    Some(lexer.DoubleQuoted(s)) if min_indent == 0 ->
-      try_parse_simple_key(
-        s,
-        advance(parser) |> skip_spaces,
-        min_indent,
-        acc,
-        parse_value_fn,
-      )
+    Some(lexer.DoubleQuoted(s)) if min_indent == 0 -> {
+      let after_key = advance(parser) |> skip_spaces
+      case current(after_key) {
+        Some(lexer.Colon) ->
+          add_key_value_pair_col(
+            s,
+            advance(after_key) |> skip_spaces,
+            min_indent,
+            min_indent,
+            Some(0),
+            acc,
+            parse_value_fn,
+          )
+        _ -> done
+      }
+    }
 
     Some(lexer.Alias(name)) if min_indent == 0 ->
       parse_alias_key(
@@ -454,20 +607,23 @@ fn parse_block_mapping_pairs(
   }
 }
 
-/// Parse a mapping pair after seeing an Indent token.
-fn parse_indented_mapping_pair(
+/// Parse a mapping pair after seeing an Indent token (with column tracking).
+fn parse_indented_mapping_pair_col(
   parser: Parser,
   min_indent: Int,
   indent_level: Int,
-  acc: Dict(String, YamlValue),
+  mapping_col: Option(Int),
+  acc: List(#(String, YamlValue)),
   parse_value_fn: ParseValueFn,
 ) -> Result(#(YamlValue, Parser), ParseError) {
   case current(parser) {
     Some(lexer.Colon) ->
-      add_key_value_pair(
+      add_key_value_pair_col(
         "",
         advance(parser) |> skip_spaces,
         indent_level,
+        min_indent,
+        mapping_col,
         acc,
         parse_value_fn,
       )
@@ -482,53 +638,73 @@ fn parse_indented_mapping_pair(
       )
 
     _ -> {
+      let saved_parser = parser
       case parse_mapping_key(parser) {
-        Ok(#(key, parser)) ->
-          try_parse_simple_key(key, parser, indent_level, acc, parse_value_fn)
+        Ok(#(key, parser)) -> {
+          let parser = skip_spaces(parser)
+          case current(parser) {
+            Some(lexer.Colon) ->
+              add_key_value_pair_col(
+                key,
+                advance(parser) |> skip_spaces,
+                indent_level,
+                min_indent,
+                mapping_col,
+                acc,
+                parse_value_fn,
+              )
+            _ -> Ok(#(value.Mapping(acc), saved_parser))
+          }
+        }
         Error(_) -> Ok(#(value.Mapping(acc), parser))
       }
     }
   }
 }
 
-/// Try to parse a simple key followed by colon.
-fn try_parse_simple_key(
+/// Add a key-value pair to the mapping and continue parsing (with column tracking).
+fn add_key_value_pair_col(
   key: String,
   parser: Parser,
-  indent_level: Int,
-  acc: Dict(String, YamlValue),
+  key_indent: Int,
+  mapping_indent: Int,
+  mapping_col: Option(Int),
+  acc: List(#(String, YamlValue)),
   parse_value_fn: ParseValueFn,
 ) -> Result(#(YamlValue, Parser), ParseError) {
-  let parser = skip_spaces(parser)
-  case current(parser) {
-    Some(lexer.Colon) ->
-      add_key_value_pair(
-        key,
-        advance(parser) |> skip_spaces,
-        indent_level,
-        acc,
-        parse_value_fn,
-      )
-    _ -> Ok(#(value.Mapping(acc), parser))
-  }
+  use #(val, parser) <- result.try(parse_mapping_value(
+    parser,
+    key_indent,
+    parse_value_fn,
+  ))
+  let acc = value.ordered_insert(acc, key, val)
+  parse_block_mapping_pairs_col(
+    parser,
+    mapping_indent,
+    mapping_col,
+    acc,
+    parse_value_fn,
+  )
 }
 
 /// Add a key-value pair to the mapping and continue parsing.
 fn add_key_value_pair(
   key: String,
   parser: Parser,
-  indent_level: Int,
-  acc: Dict(String, YamlValue),
+  key_indent: Int,
+  mapping_indent: Int,
+  acc: List(#(String, YamlValue)),
   parse_value_fn: ParseValueFn,
 ) -> Result(#(YamlValue, Parser), ParseError) {
-  use #(val, parser) <- result.try(parse_mapping_value(
+  add_key_value_pair_col(
+    key,
     parser,
-    indent_level,
+    key_indent,
+    mapping_indent,
+    None,
+    acc,
     parse_value_fn,
-  ))
-  let acc = dict.insert(acc, key, val)
-  // Continue with original min_indent (use indent_level for value parsing, but track min_indent)
-  parse_block_mapping_pairs(parser, indent_level, acc, parse_value_fn)
+  )
 }
 
 /// Parse an alias used as a mapping key.
@@ -536,13 +712,25 @@ fn parse_alias_key(
   name: String,
   parser: Parser,
   min_indent: Int,
-  acc: Dict(String, YamlValue),
+  acc: List(#(String, YamlValue)),
   parse_value_fn: ParseValueFn,
 ) -> Result(#(YamlValue, Parser), ParseError) {
   case dict.get(parser.anchors, name) {
     Ok(key_val) -> {
       let key = value_to_string(key_val)
-      try_parse_simple_key(key, parser, min_indent, acc, parse_value_fn)
+      let parser = skip_spaces(parser)
+      case current(parser) {
+        Some(lexer.Colon) ->
+          add_key_value_pair(
+            key,
+            advance(parser) |> skip_spaces,
+            min_indent,
+            min_indent,
+            acc,
+            parse_value_fn,
+          )
+        _ -> Ok(#(value.Mapping(acc), parser))
+      }
     }
     Error(_) -> Error(ParseError("Unknown anchor: " <> name, parser.pos))
   }
@@ -553,36 +741,42 @@ fn parse_anchored_key(
   anchor_name: String,
   parser: Parser,
   min_indent: Int,
-  acc: Dict(String, YamlValue),
+  acc: List(#(String, YamlValue)),
   parse_value_fn: ParseValueFn,
 ) -> Result(#(YamlValue, Parser), ParseError) {
-  case parse_mapping_key(parser) {
-    Ok(#(key, parser)) -> {
-      let parser = skip_spaces(parser)
-      case current(parser) {
-        Some(lexer.Colon) -> {
-          let parser = advance(parser) |> skip_spaces
-          use #(val, parser) <- result.try(parse_mapping_value(
-            parser,
-            min_indent,
-            parse_value_fn,
-          ))
-          let parser =
-            Parser(
-              ..parser,
-              anchors: dict.insert(
-                parser.anchors,
-                anchor_name,
-                value.String(key),
-              ),
-            )
-          let acc = dict.insert(acc, key, val)
-          parse_block_mapping_pairs(parser, min_indent, acc, parse_value_fn)
+  // Reject anchor+alias as key
+  case current(parser) {
+    Some(lexer.Alias(_)) ->
+      Error(ParseError("Cannot place an anchor on an alias", parser.pos))
+    _ ->
+      case parse_mapping_key(parser) {
+        Ok(#(key, parser)) -> {
+          let parser = skip_spaces(parser)
+          case current(parser) {
+            Some(lexer.Colon) -> {
+              let parser = advance(parser) |> skip_spaces
+              use #(val, parser) <- result.try(parse_mapping_value(
+                parser,
+                min_indent,
+                parse_value_fn,
+              ))
+              let parser =
+                Parser(
+                  ..parser,
+                  anchors: dict.insert(
+                    parser.anchors,
+                    anchor_name,
+                    value.String(key),
+                  ),
+                )
+              let acc = value.ordered_insert(acc, key, val)
+              parse_block_mapping_pairs(parser, min_indent, acc, parse_value_fn)
+            }
+            _ -> Ok(#(value.Mapping(acc), parser))
+          }
         }
-        _ -> Ok(#(value.Mapping(acc), parser))
+        Error(_) -> Ok(#(value.Mapping(acc), parser))
       }
-    }
-    Error(_) -> Ok(#(value.Mapping(acc), parser))
   }
 }
 
@@ -590,12 +784,25 @@ fn parse_anchored_key(
 fn parse_tagged_key(
   parser: Parser,
   min_indent: Int,
-  acc: Dict(String, YamlValue),
+  acc: List(#(String, YamlValue)),
   parse_value_fn: ParseValueFn,
 ) -> Result(#(YamlValue, Parser), ParseError) {
   case parse_mapping_key(parser) {
-    Ok(#(key, parser)) ->
-      try_parse_simple_key(key, parser, min_indent, acc, parse_value_fn)
+    Ok(#(key, parser)) -> {
+      let parser = skip_spaces(parser)
+      case current(parser) {
+        Some(lexer.Colon) ->
+          add_key_value_pair(
+            key,
+            advance(parser) |> skip_spaces,
+            min_indent,
+            min_indent,
+            acc,
+            parse_value_fn,
+          )
+        _ -> Ok(#(value.Mapping(acc), parser))
+      }
+    }
     Error(_) -> Ok(#(value.Mapping(acc), parser))
   }
 }
@@ -692,7 +899,7 @@ fn parse_explicit_key_in_mapping(
   parser: Parser,
   min_indent: Int,
   key_indent: Int,
-  acc: Dict(String, YamlValue),
+  acc: List(#(String, YamlValue)),
   parse_value_fn: ParseValueFn,
 ) -> Result(#(YamlValue, Parser), ParseError) {
   let parser = advance(parser) |> skip_spaces
@@ -715,7 +922,7 @@ fn handle_explicit_key_value(
   parser: Parser,
   min_indent: Int,
   key_indent: Int,
-  acc: Dict(String, YamlValue),
+  acc: List(#(String, YamlValue)),
   parse_value_fn: ParseValueFn,
 ) -> Result(#(YamlValue, Parser), ParseError) {
   case current(parser) {
@@ -727,7 +934,7 @@ fn handle_explicit_key_value(
       parse_block_mapping_pairs(
         parser,
         min_indent,
-        dict.insert(acc, key, val),
+        value.ordered_insert(acc, key, val),
         parse_value_fn,
       )
     }
@@ -743,7 +950,7 @@ fn handle_explicit_key_value(
       )
 
     Some(lexer.Question) -> {
-      let acc = dict.insert(acc, key, value.Null)
+      let acc = value.ordered_insert(acc, key, value.Null)
       parse_explicit_key_in_mapping(
         parser,
         min_indent,
@@ -754,7 +961,7 @@ fn handle_explicit_key_value(
     }
 
     _ -> {
-      let acc = dict.insert(acc, key, value.Null)
+      let acc = value.ordered_insert(acc, key, value.Null)
       parse_block_mapping_pairs(parser, min_indent, acc, parse_value_fn)
     }
   }
@@ -766,7 +973,7 @@ fn handle_indented_explicit_key_value(
   parser: Parser,
   min_indent: Int,
   indent_level: Int,
-  acc: Dict(String, YamlValue),
+  acc: List(#(String, YamlValue)),
   parse_value_fn: ParseValueFn,
 ) -> Result(#(YamlValue, Parser), ParseError) {
   case current(parser) {
@@ -778,13 +985,13 @@ fn handle_indented_explicit_key_value(
       parse_block_mapping_pairs(
         parser,
         min_indent,
-        dict.insert(acc, key, val),
+        value.ordered_insert(acc, key, val),
         parse_value_fn,
       )
     }
 
     Some(lexer.Question) -> {
-      let acc = dict.insert(acc, key, value.Null)
+      let acc = value.ordered_insert(acc, key, value.Null)
       parse_explicit_key_in_mapping(
         parser,
         min_indent,
@@ -795,7 +1002,7 @@ fn handle_indented_explicit_key_value(
     }
 
     Some(lexer.Plain(s)) -> {
-      let acc = dict.insert(acc, key, value.Null)
+      let acc = value.ordered_insert(acc, key, value.Null)
       let parser = advance(parser) |> skip_spaces
       case current(parser) {
         Some(lexer.Colon) -> {
@@ -806,7 +1013,7 @@ fn handle_indented_explicit_key_value(
           parse_block_mapping_pairs(
             parser,
             min_indent,
-            dict.insert(acc, s, val),
+            value.ordered_insert(acc, s, val),
             parse_value_fn,
           )
         }
@@ -815,7 +1022,7 @@ fn handle_indented_explicit_key_value(
     }
 
     _ -> {
-      let acc = dict.insert(acc, key, value.Null)
+      let acc = value.ordered_insert(acc, key, value.Null)
       parse_block_mapping_pairs(parser, min_indent, acc, parse_value_fn)
     }
   }

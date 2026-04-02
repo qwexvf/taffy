@@ -1,4 +1,3 @@
-import gleam/dict
 import gleam/option.{None, Some}
 import gleeunit
 import gleeunit/should
@@ -124,7 +123,7 @@ pub fn parse_flow_mapping_test() {
 pub fn parse_empty_flow_mapping_test() {
   yaml.parse("{}")
   |> should.be_ok
-  |> should.equal(value.Mapping(dict.new()))
+  |> should.equal(value.Mapping([]))
 }
 
 // Block collection tests
@@ -304,9 +303,7 @@ pub fn is_null_test() {
 
 pub fn to_json_string_test() {
   let val =
-    value.Mapping(
-      dict.from_list([#("name", value.String("John")), #("age", value.Int(30))]),
-    )
+    value.Mapping([#("name", value.String("John")), #("age", value.Int(30))])
 
   let json_str = yaml.to_json_string(val)
   // Should be valid JSON

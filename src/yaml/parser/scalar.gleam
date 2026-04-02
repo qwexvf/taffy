@@ -1,6 +1,5 @@
 //// Scalar parsing utilities.
 
-import gleam/dict
 import gleam/float
 import gleam/int
 import gleam/list
@@ -101,7 +100,7 @@ pub fn value_to_key_string(val: YamlValue) -> String {
     }
     value.Mapping(pairs) -> {
       let pair_strs =
-        dict.to_list(pairs)
+        pairs
         |> list.map(fn(pair) {
           let #(k, v) = pair
           k <> ": " <> value_to_key_string(v)

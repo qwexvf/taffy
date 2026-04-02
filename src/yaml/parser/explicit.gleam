@@ -1,6 +1,6 @@
 //// Explicit mapping parsing (using ? for keys).
 
-import gleam/dict.{type Dict}
+import gleam/dict
 import gleam/option.{Some}
 import yaml/lexer
 import yaml/parser/block
@@ -22,13 +22,13 @@ pub fn parse_explicit_mapping(
   min_indent: Int,
   parse_value_fn: ParseValueFn,
 ) -> Result(#(YamlValue, Parser), ParseError) {
-  parse_explicit_mapping_items(parser, min_indent, dict.new(), parse_value_fn)
+  parse_explicit_mapping_items(parser, min_indent, [], parse_value_fn)
 }
 
 fn parse_explicit_mapping_items(
   parser: Parser,
   min_indent: Int,
-  acc: Dict(String, YamlValue),
+  acc: List(#(String, YamlValue)),
   parse_value_fn: ParseValueFn,
 ) -> Result(#(YamlValue, Parser), ParseError) {
   let parser = skip_newlines_and_comments(parser)
@@ -47,7 +47,7 @@ fn parse_explicit_mapping_items(
               // For explicit keys at indent 0, the value can also be at indent 0
               case parse_explicit_value(parser, min_indent, parse_value_fn) {
                 Ok(#(val, parser)) -> {
-                  let acc = dict.insert(acc, key, val)
+                  let acc = value.ordered_insert(acc, key, val)
                   parse_explicit_mapping_items(
                     parser,
                     min_indent,
@@ -65,7 +65,7 @@ fn parse_explicit_mapping_items(
                   let parser = advance(parser) |> skip_spaces
                   case parse_value_fn(parser, n + 1) {
                     Ok(#(val, parser)) -> {
-                      let acc = dict.insert(acc, key, val)
+                      let acc = value.ordered_insert(acc, key, val)
                       parse_explicit_mapping_items(
                         parser,
                         min_indent,
@@ -78,7 +78,7 @@ fn parse_explicit_mapping_items(
                 }
                 // Check for another ? or implicit key at this indent
                 Some(lexer.Question) -> {
-                  let acc = dict.insert(acc, key, value.Null)
+                  let acc = value.ordered_insert(acc, key, value.Null)
                   parse_explicit_mapping_items_at_indent(
                     parser,
                     min_indent,
@@ -89,7 +89,7 @@ fn parse_explicit_mapping_items(
                 }
                 Some(lexer.Plain(s)) -> {
                   // Could be next implicit key
-                  let acc = dict.insert(acc, key, value.Null)
+                  let acc = value.ordered_insert(acc, key, value.Null)
                   parse_mixed_mapping_from_plain(
                     parser,
                     s,
@@ -101,7 +101,7 @@ fn parse_explicit_mapping_items(
                 }
                 _ -> {
                   // No colon, key maps to null
-                  let acc = dict.insert(acc, key, value.Null)
+                  let acc = value.ordered_insert(acc, key, value.Null)
                   parse_explicit_mapping_items(
                     parser,
                     min_indent,
@@ -113,7 +113,7 @@ fn parse_explicit_mapping_items(
             }
             // Check for ? at same indent level (another explicit key with no value)
             Some(lexer.Question) -> {
-              let acc = dict.insert(acc, key, value.Null)
+              let acc = value.ordered_insert(acc, key, value.Null)
               parse_explicit_mapping_items(
                 parser,
                 min_indent,
@@ -123,7 +123,7 @@ fn parse_explicit_mapping_items(
             }
             _ -> {
               // No colon, key maps to null
-              let acc = dict.insert(acc, key, value.Null)
+              let acc = value.ordered_insert(acc, key, value.Null)
               parse_explicit_mapping_items(
                 parser,
                 min_indent,
@@ -153,7 +153,7 @@ fn parse_explicit_mapping_items(
           let parser = advance(parser) |> skip_spaces
           case parse_value_fn(parser, 1) {
             Ok(#(val, parser)) -> {
-              let acc = dict.insert(acc, s, val)
+              let acc = value.ordered_insert(acc, s, val)
               parse_explicit_mapping_items(
                 parser,
                 min_indent,
@@ -174,7 +174,7 @@ fn parse_explicit_mapping_items(
           let parser = advance(parser) |> skip_spaces
           case parse_value_fn(parser, 1) {
             Ok(#(val, parser)) -> {
-              let acc = dict.insert(acc, s, val)
+              let acc = value.ordered_insert(acc, s, val)
               parse_explicit_mapping_items(
                 parser,
                 min_indent,
@@ -195,7 +195,7 @@ fn parse_explicit_mapping_items(
           let parser = advance(parser) |> skip_spaces
           case parse_value_fn(parser, 1) {
             Ok(#(val, parser)) -> {
-              let acc = dict.insert(acc, s, val)
+              let acc = value.ordered_insert(acc, s, val)
               parse_explicit_mapping_items(
                 parser,
                 min_indent,
@@ -214,7 +214,7 @@ fn parse_explicit_mapping_items(
       let parser = advance(parser) |> skip_spaces
       case parse_value_fn(parser, 1) {
         Ok(#(val, parser)) -> {
-          let acc = dict.insert(acc, "", val)
+          let acc = value.ordered_insert(acc, "", val)
           parse_explicit_mapping_items(parser, min_indent, acc, parse_value_fn)
         }
         Error(e) -> Error(e)
@@ -228,7 +228,7 @@ fn parse_explicit_mapping_items_at_indent(
   parser: Parser,
   min_indent: Int,
   n: Int,
-  acc: Dict(String, YamlValue),
+  acc: List(#(String, YamlValue)),
   parse_value_fn: ParseValueFn,
 ) -> Result(#(YamlValue, Parser), ParseError) {
   let parser = advance(parser)
@@ -243,7 +243,7 @@ fn parse_explicit_mapping_items_at_indent(
               let parser = advance(parser) |> skip_spaces
               case parse_value_fn(parser, n + 1) {
                 Ok(#(val, parser)) -> {
-                  let acc = dict.insert(acc, key, val)
+                  let acc = value.ordered_insert(acc, key, val)
                   parse_explicit_mapping_items(
                     parser,
                     min_indent,
@@ -261,7 +261,7 @@ fn parse_explicit_mapping_items_at_indent(
                   let parser = advance(parser) |> skip_spaces
                   case parse_value_fn(parser, i + 1) {
                     Ok(#(val, parser)) -> {
-                      let acc = dict.insert(acc, key, val)
+                      let acc = value.ordered_insert(acc, key, val)
                       parse_explicit_mapping_items(
                         parser,
                         min_indent,
@@ -273,7 +273,7 @@ fn parse_explicit_mapping_items_at_indent(
                   }
                 }
                 _ -> {
-                  let acc = dict.insert(acc, key, value.Null)
+                  let acc = value.ordered_insert(acc, key, value.Null)
                   parse_explicit_mapping_items(
                     parser,
                     min_indent,
@@ -284,7 +284,7 @@ fn parse_explicit_mapping_items_at_indent(
               }
             }
             _ -> {
-              let acc = dict.insert(acc, key, value.Null)
+              let acc = value.ordered_insert(acc, key, value.Null)
               parse_explicit_mapping_items(
                 parser,
                 min_indent,
@@ -315,7 +315,7 @@ fn parse_explicit_mapping_items_at_indent(
           let parser = advance(parser) |> skip_spaces
           case parse_value_fn(parser, n + 1) {
             Ok(#(val, parser)) -> {
-              let acc = dict.insert(acc, s, val)
+              let acc = value.ordered_insert(acc, s, val)
               parse_explicit_mapping_items(
                 parser,
                 min_indent,
@@ -338,7 +338,7 @@ fn parse_mixed_mapping_from_plain(
   s: String,
   min_indent: Int,
   n: Int,
-  acc: Dict(String, YamlValue),
+  acc: List(#(String, YamlValue)),
   parse_value_fn: ParseValueFn,
 ) -> Result(#(YamlValue, Parser), ParseError) {
   let parser = advance(parser) |> skip_spaces
@@ -347,7 +347,7 @@ fn parse_mixed_mapping_from_plain(
       let parser = advance(parser) |> skip_spaces
       case parse_value_fn(parser, n + 1) {
         Ok(#(val, parser)) -> {
-          let acc = dict.insert(acc, s, val)
+          let acc = value.ordered_insert(acc, s, val)
           parse_explicit_mapping_items(parser, min_indent, acc, parse_value_fn)
         }
         Error(e) -> Error(e)
