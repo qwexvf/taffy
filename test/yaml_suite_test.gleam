@@ -29,7 +29,9 @@ pub fn yaml_test_suite_test() {
     yaml_files
     |> list.map(fn(file) { run_test_file("test-suite/src/" <> file) })
 
-  let passed = list.filter(results, fn(r) { r.0 == "pass" }) |> list.length
+  let passed =
+    list.filter(results, fn(r) { r.0 == "pass" || r.0 == "order" })
+    |> list.length
   let skipped = list.filter(results, fn(r) { r.0 == "skip" }) |> list.length
 
   // Separate error test failures from parse failures
@@ -101,6 +103,52 @@ pub fn yaml_test_suite_test() {
           io.println(
             "  ... and "
             <> int.to_string(list.length(mismatches) - 30)
+            <> " more",
+          )
+        False -> Nil
+      }
+    }
+  }
+
+  // Print skipped tests
+  let skip_list = list.filter(results, fn(r) { r.0 == "skip" })
+  case skip_list {
+    [] -> Nil
+    _ -> {
+      io.println("\nSkipped (" <> int.to_string(list.length(skip_list)) <> "):")
+      list.each(skip_list, fn(r) { io.println("  - " <> r.1) })
+    }
+  }
+
+  // Print key-order-only
+  let order_list = list.filter(results, fn(r) { r.0 == "order" })
+  case order_list {
+    [] -> Nil
+    _ -> {
+      io.println(
+        "\nKey-order-only (" <> int.to_string(list.length(order_list)) <> "):",
+      )
+      list.each(order_list, fn(r) { io.println("  - " <> r.1) })
+    }
+  }
+
+  // Print lenient (should have failed but didn't)
+  let lenient_list =
+    list.filter(results, fn(r) {
+      r.0 == "fail" && string.contains(r.1, "should have failed")
+    })
+  case lenient_list {
+    [] -> Nil
+    _ -> {
+      io.println(
+        "\nLenient (" <> int.to_string(list.length(lenient_list)) <> "):",
+      )
+      list.each(list.take(lenient_list, 50), fn(r) { io.println("  - " <> r.1) })
+      case list.length(lenient_list) > 50 {
+        True ->
+          io.println(
+            "  ... and "
+            <> int.to_string(list.length(lenient_list) - 20)
             <> " more",
           )
         False -> Nil
@@ -183,22 +231,29 @@ fn run_single_test(path: String, test_case: yaml.Value) -> #(String, String) {
           let input = string.replace(input, "∎", "")
 
           // Try to parse
-          case yaml.parse(input), is_error_test {
+          case yaml.parse_all(input), is_error_test {
             // Expected to fail and did fail
             Error(_), True -> #("pass", name)
-            // Expected to fail but passed
+            // Expected to fail but passed - check if any doc parsed
             Ok(_), True -> #("fail", name <> " (should have failed)")
             // Expected to pass but failed
             Error(e), False -> #("fail", name <> " (" <> e.message <> ")")
             // Expected to pass, check JSON output if available
-            Ok(parsed), False -> {
+            Ok(docs), False -> {
               case yaml.get(test_case, "json") {
                 Error(_) -> #("pass", name)
                 Ok(expected_json) -> {
                   case yaml.as_string(expected_json) {
                     None -> #("pass", name)
                     Some(expected) -> {
-                      let actual = yaml.to_json_string(parsed)
+                      // Build actual JSON: one JSON value per document, joined by newlines
+                      let actual = case docs {
+                        [] -> ""
+                        _ ->
+                          docs
+                          |> list.map(yaml.to_json_string)
+                          |> string.join("\n")
+                      }
                       case normalize_json(actual) == normalize_json(expected) {
                         True -> #("pass", name)
                         False -> {

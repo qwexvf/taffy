@@ -2,7 +2,7 @@
 
 import gleam/int
 import gleam/list
-import gleam/option.{type Option, Some}
+import gleam/option.{type Option, None, Some}
 import yaml/lexer
 import yaml/parser/types.{type Parser, Parser}
 
@@ -30,6 +30,70 @@ pub fn skip_whitespace(parser: Parser) -> Parser {
     Some(lexer.Indent(_)) -> skip_whitespace(advance(parser))
     Some(lexer.Comment(_)) -> skip_whitespace(advance(parser))
     _ -> parser
+  }
+}
+
+/// Check if the whitespace being skipped contains a comment.
+pub fn flow_whitespace_has_comment(parser: Parser) -> Bool {
+  case current(parser) {
+    Some(lexer.Comment(_)) -> True
+    Some(lexer.Newline) -> flow_whitespace_has_comment(advance(parser))
+    Some(lexer.Indent(_)) -> flow_whitespace_has_comment(advance(parser))
+    _ -> False
+  }
+}
+
+/// Skip whitespace in flow context, validating minimum indentation.
+pub fn skip_flow_whitespace(parser: Parser) -> Result(Parser, types.ParseError) {
+  case current(parser) {
+    Some(lexer.Newline) -> {
+      // After newline, at indent 0. Check flow_min_indent.
+      case parser.flow_min_indent > 0 {
+        True -> {
+          // Peek at what follows - if it's content at indent 0, reject
+          let after = advance(parser)
+          case current(after) {
+            // Another newline or indent is fine (keep skipping)
+            Some(lexer.Newline) -> skip_flow_whitespace(after)
+            Some(lexer.Indent(_)) -> skip_flow_whitespace(after)
+            Some(lexer.Comment(_)) -> skip_flow_whitespace(after)
+            // EOF and flow terminators are always allowed
+            Some(lexer.Eof) | None -> Ok(after)
+            Some(lexer.BracketClose)
+            | Some(lexer.BraceClose)
+            | Some(lexer.Comma) -> Ok(after)
+            // Other content at indent 0 in flow context is invalid
+            _ ->
+              Error(types.ParseError(
+                "Flow content must be indented",
+                parser.pos,
+              ))
+          }
+        }
+        False -> skip_flow_whitespace(advance(parser))
+      }
+    }
+    Some(lexer.Indent(n)) -> {
+      case n >= parser.flow_min_indent {
+        True -> skip_flow_whitespace(advance(parser))
+        False -> {
+          // Allow flow terminators at insufficient indent
+          let after = advance(parser)
+          case current(after) {
+            Some(lexer.BracketClose)
+            | Some(lexer.BraceClose)
+            | Some(lexer.Comma) -> Ok(after)
+            _ ->
+              Error(types.ParseError(
+                "Flow content must be indented",
+                parser.pos,
+              ))
+          }
+        }
+      }
+    }
+    Some(lexer.Comment(_)) -> skip_flow_whitespace(advance(parser))
+    _ -> Ok(parser)
   }
 }
 
@@ -111,6 +175,7 @@ pub fn token_to_string(token: lexer.Token) -> String {
     lexer.Comment(c) -> "#" <> c
     lexer.Newline -> "\\n"
     lexer.Indent(n) -> "indent(" <> int.to_string(n) <> ")"
+    lexer.Directive(d) -> "%" <> d
     lexer.Eof -> "EOF"
   }
 }

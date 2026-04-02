@@ -1,7 +1,9 @@
 //// YAML parser - parses tokens into YAML values.
 
 import gleam/dict
+import gleam/list
 import gleam/option.{None, Some}
+import gleam/result
 import gleam/string
 import yaml/lexer.{type Token}
 import yaml/parser/block
@@ -54,6 +56,174 @@ pub fn parse(tokens: List(Token)) -> Result(YamlValue, ParseError) {
   }
 }
 
+/// Parses all documents in a YAML stream.
+pub fn parse_all(tokens: List(Token)) -> Result(List(YamlValue), ParseError) {
+  let parser = new(tokens)
+  // Consume and validate directives at the start
+  use parser <- result.try(consume_directives(parser))
+  parse_documents(parser, [])
+}
+
+/// Validate a directive's content.
+fn validate_directive(
+  content: String,
+  is_yaml: Bool,
+  pos: Int,
+) -> Result(Nil, ParseError) {
+  case is_yaml {
+    True -> {
+      // Split at first valid comment (space + #)
+      let before_comment = case string.split_once(content, " #") {
+        Ok(#(before, _)) -> string.trim(before)
+        Error(_) -> string.trim(content)
+      }
+      // Check for # without preceding space (invalid comment)
+      let has_invalid_hash = string.contains(before_comment, "#")
+      // After version should be just "YAML X.Y" (2 words max)
+      let parts =
+        string.split(before_comment, " ")
+        |> list.filter(fn(p) { p != "" })
+      let too_many_parts = list.length(parts) > 2
+      case has_invalid_hash || too_many_parts {
+        True -> Error(ParseError("Invalid %YAML directive: %" <> content, pos))
+        False -> Ok(Nil)
+      }
+    }
+    False -> Ok(Nil)
+  }
+}
+
+/// Consume YAML directives (%YAML, %TAG) before a document.
+/// Validates that directives are followed by a document start marker.
+fn consume_directives(parser: Parser) -> Result(Parser, ParseError) {
+  let parser = skip_newlines_and_comments(parser)
+  case current(parser) {
+    Some(lexer.Directive(d)) -> {
+      let is_yaml_dir = string.starts_with(d, "YAML")
+      // Validate %YAML directive format
+      use _ <- result.try(validate_directive(d, is_yaml_dir, parser.pos))
+      let parser = advance(parser)
+      let parser = skip_newlines_and_comments(parser)
+      // After directives, must have --- or more directives
+      case current(parser) {
+        Some(lexer.DocStart) -> Ok(parser)
+        Some(lexer.Directive(d2)) -> {
+          case is_yaml_dir && string.starts_with(d2, "YAML") {
+            True -> Error(ParseError("Duplicate %YAML directive", parser.pos))
+            False -> consume_directives(parser)
+          }
+        }
+        Some(lexer.DocEnd) ->
+          Error(ParseError(
+            "Directive must be followed by document start '---'",
+            parser.pos,
+          ))
+        None | Some(lexer.Eof) ->
+          Error(ParseError(
+            "Directive must be followed by document start '---'",
+            parser.pos,
+          ))
+        _ -> Ok(parser)
+      }
+    }
+    _ -> Ok(parser)
+  }
+}
+
+/// Check that there's no content on the same line as `...`.
+fn check_after_doc_end(parser: Parser) -> Result(Parser, ParseError) {
+  case current(parser) {
+    Some(lexer.Newline)
+    | Some(lexer.Indent(_))
+    | Some(lexer.Comment(_))
+    | Some(lexer.Eof)
+    | None -> Ok(parser)
+    Some(_) ->
+      Error(ParseError(
+        "Invalid content on same line as document end marker '...'",
+        parser.pos,
+      ))
+  }
+}
+
+fn parse_documents(
+  parser: Parser,
+  acc: List(YamlValue),
+) -> Result(List(YamlValue), ParseError) {
+  let parser = skip_newlines_and_comments(parser)
+  case current(parser) {
+    None | Some(lexer.Eof) -> Ok(list.reverse(acc))
+    Some(lexer.DocStart) -> {
+      let parser = advance(parser) |> skip_newlines_and_comments
+      case current(parser) {
+        // Empty document followed by another doc start or doc end
+        Some(lexer.DocStart) -> parse_documents(parser, [value.Null, ..acc])
+        Some(lexer.DocEnd) -> {
+          let parser = advance(parser)
+          use parser <- result.try(check_after_doc_end(parser))
+          let parser = skip_newlines_and_comments(parser)
+          use parser <- result.try(consume_directives(parser))
+          parse_documents(parser, [value.Null, ..acc])
+        }
+        None | Some(lexer.Eof) -> Ok(list.reverse([value.Null, ..acc]))
+        _ -> {
+          use #(val, parser) <- result.try(parse_value(parser, 0))
+          let parser = skip_newlines_and_comments(parser)
+          case current(parser) {
+            Some(lexer.DocEnd) -> {
+              let parser = advance(parser)
+              use parser <- result.try(check_after_doc_end(parser))
+              let parser = skip_newlines_and_comments(parser)
+              use parser <- result.try(consume_directives(parser))
+              parse_documents(parser, [val, ..acc])
+            }
+            Some(lexer.DocStart) | None | Some(lexer.Eof) ->
+              parse_documents(parser, [val, ..acc])
+            Some(token) ->
+              Error(ParseError(
+                "Unexpected trailing content: " <> token_to_string(token),
+                parser.pos,
+              ))
+          }
+        }
+      }
+    }
+    Some(lexer.DocEnd) -> {
+      let parser = advance(parser)
+      use parser <- result.try(check_after_doc_end(parser))
+      let parser = skip_newlines_and_comments(parser)
+      use parser <- result.try(consume_directives(parser))
+      parse_documents(parser, acc)
+    }
+    // Directive between documents - consume and continue
+    Some(lexer.Directive(_)) -> {
+      use parser <- result.try(consume_directives(parser))
+      parse_documents(parser, acc)
+    }
+    _ -> {
+      // Bare document (no --- prefix)
+      use #(val, parser) <- result.try(parse_value(parser, 0))
+      let parser = skip_newlines_and_comments(parser)
+      case current(parser) {
+        Some(lexer.DocEnd) -> {
+          let parser = advance(parser)
+          use parser <- result.try(check_after_doc_end(parser))
+          let parser = skip_newlines_and_comments(parser)
+          use parser <- result.try(consume_directives(parser))
+          parse_documents(parser, [val, ..acc])
+        }
+        Some(lexer.DocStart) -> parse_documents(parser, [val, ..acc])
+        None | Some(lexer.Eof) -> Ok(list.reverse([val, ..acc]))
+        Some(token) ->
+          Error(ParseError(
+            "Unexpected trailing content: " <> token_to_string(token),
+            parser.pos,
+          ))
+      }
+    }
+  }
+}
+
 /// Parses a single value at the given indentation level.
 pub fn parse_value(
   parser: Parser,
@@ -67,7 +237,7 @@ pub fn parse_value(
     // Newline means next content is at indent 0
     // If min_indent > 0, there's no value at the required indent
     Some(lexer.Newline) -> {
-      let parser = advance(parser)
+      let parser = Parser(..advance(parser), in_inline_value: False)
       case min_indent > 0 {
         True -> Ok(#(value.Null, parser))
         False -> parse_value(parser, min_indent)
@@ -77,6 +247,8 @@ pub fn parse_value(
     None -> Ok(#(value.Null, parser))
     Some(lexer.Eof) -> Ok(#(value.Null, parser))
     Some(lexer.DocEnd) -> Ok(#(value.Null, parser))
+    // Directive - treat as document boundary (stop parsing current value)
+    Some(lexer.Directive(_)) -> Ok(#(value.Null, parser))
     // Another document starting - current document is empty
     Some(lexer.DocStart) -> Ok(#(value.Null, parser))
 
@@ -85,6 +257,12 @@ pub fn parse_value(
       let parser = advance(parser) |> skip_spaces
       // Check if this anchor is on a mapping key (scalar followed by colon)
       case current(parser) {
+        // Reject two anchors on the same node
+        Some(lexer.Anchor(_)) ->
+          Error(ParseError("A node can only have one anchor", parser.pos))
+        // Reject anchor on an alias (can't anchor an alias reference)
+        Some(lexer.Alias(_)) ->
+          Error(ParseError("Cannot place an anchor on an alias", parser.pos))
         Some(lexer.Plain(s)) -> {
           let after_plain = advance(parser) |> skip_spaces
           case current(after_plain) {
@@ -108,7 +286,11 @@ pub fn parse_value(
               let parser =
                 Parser(
                   ..advance(parser),
-                  anchors: dict.insert(parser.anchors, name, scalar.parse_scalar(s)),
+                  anchors: dict.insert(
+                    parser.anchors,
+                    name,
+                    scalar.parse_scalar(s),
+                  ),
                 )
               Ok(#(scalar.parse_scalar(s), parser))
             }
@@ -143,6 +325,12 @@ pub fn parse_value(
             }
           }
         }
+        // Block sequence indicator right after anchor on same line is invalid
+        Some(lexer.Dash) ->
+          Error(ParseError(
+            "Block sequence not allowed on same line as anchor",
+            parser.pos,
+          ))
         _ -> {
           // Not a scalar, parse normally
           case parse_value(parser, min_indent) {
@@ -219,7 +407,8 @@ pub fn parse_value(
 
     // Flow sequence - might be a mapping key
     Some(lexer.BracketOpen) -> {
-      case flow.parse_flow_sequence(advance(parser)) {
+      let parser = Parser(..advance(parser), flow_min_indent: min_indent)
+      case flow.parse_flow_sequence(parser) {
         Ok(#(seq_val, parser)) -> {
           let parser = skip_spaces(parser)
           case current(parser) {
@@ -233,6 +422,15 @@ pub fn parse_value(
                 parse_value,
               )
             }
+            // After flow collection in block context, reject inline scalars
+            Some(lexer.Plain(_))
+            | Some(lexer.SingleQuoted(_))
+            | Some(lexer.DoubleQuoted(_))
+            | Some(lexer.Dash) ->
+              Error(ParseError(
+                "Invalid content after flow sequence",
+                parser.pos,
+              ))
             _ -> Ok(#(seq_val, parser))
           }
         }
@@ -242,7 +440,8 @@ pub fn parse_value(
 
     // Flow mapping - might be a mapping key
     Some(lexer.BraceOpen) -> {
-      case flow.parse_flow_mapping(advance(parser)) {
+      let parser = Parser(..advance(parser), flow_min_indent: min_indent)
+      case flow.parse_flow_mapping(parser) {
         Ok(#(map_val, parser)) -> {
           let parser = skip_spaces(parser)
           case current(parser) {
@@ -256,6 +455,12 @@ pub fn parse_value(
                 parse_value,
               )
             }
+            // After flow collection in block context, reject inline scalars
+            Some(lexer.Plain(_))
+            | Some(lexer.SingleQuoted(_))
+            | Some(lexer.DoubleQuoted(_))
+            | Some(lexer.Dash) ->
+              Error(ParseError("Invalid content after flow mapping", parser.pos))
             _ -> Ok(#(map_val, parser))
           }
         }
@@ -310,7 +515,8 @@ pub fn parse_value(
         | Some(lexer.Literal(_))
         | Some(lexer.Folded(_))
         | Some(lexer.DocStart)
-        | Some(lexer.DocEnd) ->
+        | Some(lexer.DocEnd)
+        | Some(lexer.Directive(_)) ->
           block.parse_block_mapping_from_key(
             "",
             after_colon,
@@ -355,13 +561,26 @@ pub fn parse_value(
             | Some(lexer.Folded(_))
             | Some(lexer.BracketOpen)
             | Some(lexer.BraceOpen)
-            | None ->
-              block.parse_block_mapping_from_key(
-                full_key,
-                after_colon,
-                min_indent,
-                parse_value,
-              )
+            | None -> {
+              // Reject nested implicit mappings on same line as parent value
+              case
+                parser.in_inline_value
+                && is_inline_value_token(current(after_colon))
+              {
+                True ->
+                  Error(ParseError(
+                    "Implicit mapping not allowed as inline mapping value",
+                    parser.pos,
+                  ))
+                False ->
+                  block.parse_block_mapping_from_key(
+                    full_key,
+                    after_colon,
+                    min_indent,
+                    parse_value,
+                  )
+              }
+            }
             // Colon followed by non-whitespace = continue collecting
             _ -> {
               let #(rest, parser) =
@@ -402,13 +621,28 @@ pub fn parse_value(
     Some(lexer.SingleQuoted(s)) -> {
       let parser = advance(parser) |> skip_spaces
       case current(parser) {
-        Some(lexer.Colon) ->
-          block.parse_block_mapping_from_key(
-            s,
-            advance(parser),
-            min_indent,
-            parse_value,
-          )
+        Some(lexer.Colon) -> {
+          let after_colon = advance(parser)
+          case
+            parser.in_inline_value
+            && is_inline_value_token(current(after_colon))
+          {
+            True ->
+              Error(ParseError(
+                "Implicit mapping not allowed as inline mapping value",
+                parser.pos,
+              ))
+            False ->
+              block.parse_block_mapping_from_key(
+                s,
+                after_colon,
+                min_indent,
+                parse_value,
+              )
+          }
+        }
+        Some(lexer.Plain(_)) ->
+          Error(ParseError("Invalid content after quoted value", parser.pos))
         _ -> Ok(#(value.String(s), parser))
       }
     }
@@ -416,20 +650,46 @@ pub fn parse_value(
     Some(lexer.DoubleQuoted(s)) -> {
       let parser = advance(parser) |> skip_spaces
       case current(parser) {
-        Some(lexer.Colon) ->
-          block.parse_block_mapping_from_key(
-            s,
-            advance(parser),
-            min_indent,
-            parse_value,
-          )
+        Some(lexer.Colon) -> {
+          let after_colon = advance(parser)
+          case
+            parser.in_inline_value
+            && is_inline_value_token(current(after_colon))
+          {
+            True ->
+              Error(ParseError(
+                "Implicit mapping not allowed as inline mapping value",
+                parser.pos,
+              ))
+            False ->
+              block.parse_block_mapping_from_key(
+                s,
+                after_colon,
+                min_indent,
+                parse_value,
+              )
+          }
+        }
+        Some(lexer.Plain(_)) ->
+          Error(ParseError("Invalid content after quoted value", parser.pos))
         _ -> Ok(#(value.String(s), parser))
       }
     }
 
     Some(lexer.Indent(n)) if n >= min_indent -> {
-      let parser = advance(parser)
-      parse_value(parser, min_indent)
+      let parser = Parser(..advance(parser), in_inline_value: False)
+      case current(parser) {
+        Some(lexer.Dash) ->
+          case is_sequence_dash(parser, n) {
+            True -> block.parse_block_sequence(parser, n, parse_value)
+            False -> parse_value(parser, min_indent)
+          }
+        Some(lexer.Plain(_))
+        | Some(lexer.SingleQuoted(_))
+        | Some(lexer.DoubleQuoted(_)) ->
+          parse_value_after_indent(parser, n, min_indent)
+        _ -> parse_value(parser, min_indent)
+      }
     }
 
     Some(lexer.Indent(_)) -> Ok(#(value.Null, parser))
@@ -439,6 +699,90 @@ pub fn parse_value(
         "Unexpected token: " <> token_to_string(token),
         parser.pos,
       ))
+  }
+}
+
+/// Check whether a Dash at indent n should be treated as a sequence entry
+/// or as plain text. Returns True when the dash is a valid sequence entry.
+fn is_sequence_dash(parser: Parser, n: Int) -> Bool {
+  case parser.seq_entry_indent {
+    // If we know the parent sequence's entry indent, the dash must match it
+    option.Some(sei) if n > sei && n == 0 -> True
+    option.Some(sei) if n == sei -> True
+    option.Some(_) -> False
+    // No parent sequence context - always treat as sequence
+    option.None -> True
+  }
+}
+
+/// Check whether a Dash at indent n in scalar continuation should be absorbed
+/// as plain text rather than terminating the scalar.
+fn should_absorb_dash_in_scalar(
+  seq_entry_indent: option.Option(Int),
+  n: Int,
+  min_indent: Int,
+) -> Bool {
+  case seq_entry_indent {
+    option.Some(sei) -> n > sei && n == min_indent
+    option.None -> False
+  }
+}
+
+/// Parse value after seeing an Indent(n) token.
+/// For mapping keys at this indent, uses n as min_indent so continuation
+/// pairs must be at the same indent level.
+fn parse_value_after_indent(
+  parser: Parser,
+  n: Int,
+  min_indent: Int,
+) -> Result(#(YamlValue, Parser), ParseError) {
+  case current(parser) {
+    Some(lexer.Plain(s)) -> {
+      let #(full_key, kparser) = collect_block_plain_key(advance(parser), s)
+      let kparser = skip_spaces(kparser)
+      case current(kparser) {
+        Some(lexer.Colon) -> {
+          let after_colon = advance(kparser)
+          // Verify this is a key separator (colon followed by value/whitespace)
+          case current(after_colon) {
+            Some(lexer.Plain(_))
+            | Some(lexer.SingleQuoted(_))
+            | Some(lexer.DoubleQuoted(_))
+            | Some(lexer.Newline)
+            | Some(lexer.Indent(_))
+            | Some(lexer.Eof)
+            | Some(lexer.Comment(_))
+            | Some(lexer.Anchor(_))
+            | Some(lexer.Alias(_))
+            | Some(lexer.Tag(_))
+            | Some(lexer.Dash)
+            | Some(lexer.Question)
+            | Some(lexer.Literal(_))
+            | Some(lexer.Folded(_))
+            | Some(lexer.BracketOpen)
+            | Some(lexer.BraceOpen)
+            | None ->
+              block.parse_block_mapping_from_key(
+                full_key,
+                after_colon,
+                n,
+                parse_value,
+              )
+            _ -> parse_value(parser, min_indent)
+          }
+        }
+        _ -> parse_value(parser, min_indent)
+      }
+    }
+    Some(lexer.SingleQuoted(s)) | Some(lexer.DoubleQuoted(s)) -> {
+      let kp = advance(parser) |> skip_spaces
+      case current(kp) {
+        Some(lexer.Colon) ->
+          block.parse_block_mapping_from_key(s, advance(kp), n, parse_value)
+        _ -> parse_value(parser, min_indent)
+      }
+    }
+    _ -> parse_value(parser, min_indent)
   }
 }
 
@@ -545,11 +889,26 @@ fn collect_block_plain_value(
     Some(lexer.Indent(n)) if n >= min_indent -> {
       let after_indent = advance(parser)
       case current(after_indent) {
-        // Indicators at indent level start new structures - stop collecting
-        Some(lexer.Dash) | Some(lexer.Question) | Some(lexer.Colon) -> #(
-          acc,
-          parser,
-        )
+        // Dash: check if it should be absorbed as plain text or terminate
+        Some(lexer.Dash) ->
+          case
+            should_absorb_dash_in_scalar(parser.seq_entry_indent, n, min_indent)
+          {
+            True -> {
+              let sep = case string.ends_with(acc, "\n") {
+                True -> ""
+                False -> " "
+              }
+              collect_block_plain_value(
+                advance(after_indent),
+                acc <> sep <> "-",
+                min_indent,
+              )
+            }
+            False -> #(acc, parser)
+          }
+        // ? and : at indent level start new structures - stop collecting
+        Some(lexer.Question) | Some(lexer.Colon) -> #(acc, parser)
         // Comment after indent ends the scalar
         Some(lexer.Comment(_)) -> #(acc, parser)
         // Another Indent = blank line with leading spaces, add \n and continue
@@ -709,6 +1068,18 @@ fn check_multiline_continuation(
     }
     // Insufficient indent or no indent - scalar ends
     _ -> #(acc, Parser(..parser, pos: parser.pos - 1))
+  }
+}
+
+/// Check if a token represents an inline value (not newline/indent/comment/eof).
+fn is_inline_value_token(token: option.Option(lexer.Token)) -> Bool {
+  case token {
+    Some(lexer.Newline)
+    | Some(lexer.Indent(_))
+    | Some(lexer.Comment(_))
+    | Some(lexer.Eof)
+    | None -> False
+    _ -> True
   }
 }
 

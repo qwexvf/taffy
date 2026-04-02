@@ -25,6 +25,8 @@
 //// ```
 
 import gleam/dict.{type Dict}
+import gleam/float
+import gleam/int
 import gleam/json.{type Json}
 import gleam/list
 import gleam/option.{type Option}
@@ -66,6 +68,16 @@ pub fn parse(input: String) -> Result(Value, Error) {
   case lexer.tokenize(input) {
     Error(msg) -> Error(ParseError(msg, 0))
     Ok(tokens) -> parser.parse(tokens)
+  }
+}
+
+/// Parses all documents in a YAML stream.
+/// Returns a list of values, one per document.
+/// Empty streams return an empty list.
+pub fn parse_all(input: String) -> Result(List(Value), Error) {
+  case lexer.tokenize(input) {
+    Error(msg) -> Error(ParseError(msg, 0))
+    Ok(tokens) -> parser.parse_all(tokens)
   }
 }
 
@@ -154,13 +166,19 @@ pub fn to_json(val: Value) -> Json {
     value.Null -> json.null()
     value.Bool(b) -> json.bool(b)
     value.Int(i) -> json.int(i)
-    value.Float(f) -> json.float(f)
+    value.Float(f) -> {
+      // Render whole-number floats as integers in JSON (e.g., 450.0 -> 450)
+      let truncated = float.truncate(f)
+      case f == int.to_float(truncated) {
+        True -> json.int(truncated)
+        False -> json.float(f)
+      }
+    }
     value.String(s) -> json.string(s)
     value.Sequence(items) -> json.array(items, to_json)
     value.Mapping(pairs) ->
       json.object(
         pairs
-        |> dict.to_list
         |> list.map(fn(pair) { #(pair.0, to_json(pair.1)) }),
       )
   }

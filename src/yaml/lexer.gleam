@@ -1,5 +1,6 @@
 //// YAML lexer - tokenizes YAML input.
 
+import gleam/int
 import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/string
@@ -48,24 +49,47 @@ pub type Token {
   Newline
   /// Indentation (number of spaces)
   Indent(Int)
+  /// YAML directive (%YAML, %TAG, etc.)
+  Directive(String)
   /// End of file
   Eof
 }
 
 /// Lexer state.
 pub type Lexer {
-  Lexer(input: String, pos: Int, line: Int, col: Int, in_document: Bool)
+  Lexer(
+    input: String,
+    pos: Int,
+    line: Int,
+    col: Int,
+    in_document: Bool,
+    flow_level: Int,
+  )
 }
 
 /// Creates a new lexer.
 pub fn new(input: String) -> Lexer {
-  Lexer(input: input, pos: 0, line: 1, col: 0, in_document: False)
+  Lexer(
+    input: input,
+    pos: 0,
+    line: 1,
+    col: 0,
+    in_document: False,
+    flow_level: 0,
+  )
 }
 
 /// Tokenizes the entire input.
 pub fn tokenize(input: String) -> Result(List(Token), String) {
   let lexer = new(input)
-  tokenize_all(lexer, [])
+  case count_indent(lexer) {
+    Error(e) -> Error(e)
+    Ok(#(indent, lexer)) ->
+      case indent {
+        0 -> tokenize_all(lexer, [])
+        n -> tokenize_all(lexer, [Indent(n)])
+      }
+  }
 }
 
 fn tokenize_all(lexer: Lexer, acc: List(Token)) -> Result(List(Token), String) {
@@ -89,40 +113,54 @@ pub fn next_token(lexer: Lexer) -> Result(#(Token, Lexer), String) {
         // Newline
         "\n" -> {
           let lexer = advance(lexer)
-          let #(indent, lexer) = count_indent(lexer)
-          case indent {
-            0 -> Ok(#(Newline, lexer))
-            n -> Ok(#(Indent(n), lexer))
+          case count_indent(lexer) {
+            Error(e) -> Error(e)
+            Ok(#(indent, lexer)) ->
+              case indent {
+                0 -> Ok(#(Newline, lexer))
+                n -> Ok(#(Indent(n), lexer))
+              }
           }
         }
         "\r" -> {
           let lexer = advance(lexer)
           // Handle \r\n
-          case peek(lexer) {
-            Some("\n") -> {
-              let lexer = advance(lexer)
-              let #(indent, lexer) = count_indent(lexer)
+          let lexer = case peek(lexer) {
+            Some("\n") -> advance(lexer)
+            _ -> lexer
+          }
+          case count_indent(lexer) {
+            Error(e) -> Error(e)
+            Ok(#(indent, lexer)) ->
               case indent {
                 0 -> Ok(#(Newline, lexer))
                 n -> Ok(#(Indent(n), lexer))
               }
-            }
-            _ -> {
-              let #(indent, lexer) = count_indent(lexer)
-              case indent {
-                0 -> Ok(#(Newline, lexer))
-                n -> Ok(#(Indent(n), lexer))
-              }
-            }
           }
         }
         // Skip spaces (not at line start)
         " " -> next_token(advance(lexer))
         "\t" -> next_token(advance(lexer))
-        // Comment
+        // Comment - must be preceded by whitespace or at start of line
         "#" -> {
-          let #(text, lexer) = read_until_newline(advance(lexer))
-          Ok(#(Comment(text), lexer))
+          let valid = case lexer.pos > 0 {
+            False -> True
+            True -> {
+              let before = string.slice(lexer.input, lexer.pos - 1, 1)
+              case before {
+                " " | "\t" | "\n" | "\r" -> True
+                _ -> False
+              }
+            }
+          }
+          case valid {
+            True -> {
+              let #(text, lexer) = read_until_newline(advance(lexer))
+              Ok(#(Comment(text), lexer))
+            }
+            False ->
+              Error("Invalid comment: '#' must be preceded by whitespace")
+          }
         }
         // Colon (check for mapping)
         ":" -> {
@@ -174,6 +212,10 @@ pub fn next_token(lexer: Lexer) -> Result(#(Token, Lexer), String) {
               case peek(lexer) {
                 Some(" ") | Some("\n") | Some("\r") | Some("\t") | None ->
                   Ok(#(Dash, lexer))
+                // In flow context, dash followed by flow indicator is invalid
+                Some(",") | Some("]") | Some("}") | Some("[") | Some("{")
+                  if lexer.flow_level > 0
+                -> Error("Invalid use of dash indicator in flow context")
                 _ -> {
                   // Part of a plain scalar (like negative number)
                   read_plain_scalar(Lexer(..lexer, pos: lexer.pos - 1))
@@ -201,10 +243,28 @@ pub fn next_token(lexer: Lexer) -> Result(#(Token, Lexer), String) {
           }
         }
         // Flow indicators
-        "[" -> Ok(#(BracketOpen, advance(lexer)))
-        "]" -> Ok(#(BracketClose, advance(lexer)))
-        "{" -> Ok(#(BraceOpen, advance(lexer)))
-        "}" -> Ok(#(BraceClose, advance(lexer)))
+        "[" -> {
+          let lexer = advance(lexer)
+          Ok(#(BracketOpen, Lexer(..lexer, flow_level: lexer.flow_level + 1)))
+        }
+        "]" -> {
+          let lexer = advance(lexer)
+          Ok(#(
+            BracketClose,
+            Lexer(..lexer, flow_level: int.max(0, lexer.flow_level - 1)),
+          ))
+        }
+        "{" -> {
+          let lexer = advance(lexer)
+          Ok(#(BraceOpen, Lexer(..lexer, flow_level: lexer.flow_level + 1)))
+        }
+        "}" -> {
+          let lexer = advance(lexer)
+          Ok(#(
+            BraceClose,
+            Lexer(..lexer, flow_level: int.max(0, lexer.flow_level - 1)),
+          ))
+        }
         "," -> Ok(#(Comma, advance(lexer)))
         // Anchor
         "&" -> {
@@ -239,9 +299,9 @@ pub fn next_token(lexer: Lexer) -> Result(#(Token, Lexer), String) {
                 Some(next) -> {
                   case is_letter(next) {
                     True -> {
-                      // Skip the directive line and continue with next token
-                      let #(_, lexer) = read_until_newline(advance(lexer))
-                      next_token(lexer)
+                      // Emit directive token instead of skipping
+                      let #(text, lexer) = read_until_newline(advance(lexer))
+                      Ok(#(Directive(text), lexer))
                     }
                     False -> read_plain_scalar(lexer)
                   }
@@ -281,14 +341,49 @@ fn advance_n(lexer: Lexer, n: Int) -> Lexer {
   Lexer(..lexer, pos: lexer.pos + n, col: lexer.col + n)
 }
 
-fn count_indent(lexer: Lexer) -> #(Int, Lexer) {
+fn count_indent(lexer: Lexer) -> Result(#(Int, Lexer), String) {
   count_indent_loop(lexer, 0)
 }
 
-fn count_indent_loop(lexer: Lexer, count: Int) -> #(Int, Lexer) {
+fn count_indent_loop(lexer: Lexer, count: Int) -> Result(#(Int, Lexer), String) {
   case peek(lexer) {
     Some(" ") -> count_indent_loop(advance(lexer), count + 1)
-    _ -> #(count, Lexer(..lexer, col: count))
+    Some("\t") ->
+      case lexer.flow_level > 0 {
+        // In flow context, tabs are fine
+        True -> count_indent_loop(advance(lexer), count + 1)
+        False ->
+          case count {
+            // Tab as first character of indentation
+            0 -> {
+              // Check what follows the tab(s)
+              // Tabs before flow collections or non-indicator content are OK
+              // Tabs before block indicators (mapping key, sequence dash) are errors
+              let after_tabs = skip_tabs_lexer(advance(lexer))
+              case peek(after_tabs) {
+                // Block sequence/mapping/explicit key indicators after tab = error
+                Some("-") | Some("?") ->
+                  Error("Tabs are not allowed as indentation in YAML")
+                // EOF or newline after tab = just whitespace
+                None | Some("\n") | Some("\r") ->
+                  Ok(#(0, Lexer(..lexer, col: 0)))
+                // Everything else (flow, scalars, etc.) = tab is just whitespace
+                _ -> Ok(#(0, Lexer(..after_tabs, col: 0)))
+              }
+            }
+            // Tab after spaces - stop counting, tab is content/inline whitespace
+            _ -> Ok(#(count, Lexer(..lexer, col: count)))
+          }
+      }
+    _ -> Ok(#(count, Lexer(..lexer, col: count)))
+  }
+}
+
+fn skip_tabs_lexer(lexer: Lexer) -> Lexer {
+  case peek(lexer) {
+    Some("\t") -> skip_tabs_lexer(advance(lexer))
+    Some(" ") -> skip_tabs_lexer(advance(lexer))
+    _ -> lexer
   }
 }
 
@@ -356,12 +451,13 @@ fn read_tag_loop(lexer: Lexer, acc: String) -> #(String, Lexer) {
 }
 
 fn read_single_quoted(lexer: Lexer) -> Result(#(Token, Lexer), String) {
-  read_single_quoted_loop(lexer, "")
+  read_single_quoted_loop(lexer, "", False)
 }
 
 fn read_single_quoted_loop(
   lexer: Lexer,
   acc: String,
+  multiline: Bool,
 ) -> Result(#(Token, Lexer), String) {
   case peek(lexer) {
     None -> Error("Unterminated single-quoted string")
@@ -369,24 +465,38 @@ fn read_single_quoted_loop(
       // Check for escaped quote ''
       let lexer = advance(lexer)
       case peek(lexer) {
-        Some("'") -> read_single_quoted_loop(advance(lexer), acc <> "'")
-        _ -> Ok(#(SingleQuoted(acc), lexer))
+        Some("'") ->
+          read_single_quoted_loop(advance(lexer), acc <> "'", multiline)
+        _ ->
+          case multiline {
+            True -> check_multiline_implicit_key(lexer, SingleQuoted(acc))
+            False -> Ok(#(SingleQuoted(acc), lexer))
+          }
       }
     }
     // Handle newline folding in single-quoted strings
     Some("\n") -> {
       let lexer = advance(lexer)
-      // Skip leading whitespace on continuation line
-      let lexer = skip_quoted_continuation_whitespace(lexer)
-      // Check for empty lines (they become actual newlines)
-      case peek(lexer) {
-        Some("\n") -> {
-          // Empty line - preserve as newline
-          read_single_quoted_loop(lexer, acc <> "\n")
-        }
-        _ -> {
-          // Single newline is folded to space
-          read_single_quoted_loop(lexer, acc <> " ")
+      // Check for document markers at column 0
+      case check_document_marker(lexer) {
+        True ->
+          Error(
+            "Unterminated single-quoted string (document marker in quoted string)",
+          )
+        False -> {
+          // Skip leading whitespace on continuation line
+          let lexer = skip_quoted_continuation_whitespace(lexer)
+          // Check for empty lines (they become actual newlines)
+          case peek(lexer) {
+            Some("\n") -> {
+              // Empty line - preserve as newline
+              read_single_quoted_loop(lexer, acc <> "\n", True)
+            }
+            _ -> {
+              // Single newline is folded to space
+              read_single_quoted_loop(lexer, acc <> " ", True)
+            }
+          }
         }
       }
     }
@@ -397,13 +507,75 @@ fn read_single_quoted_loop(
         Some("\n") -> advance(lexer)
         _ -> lexer
       }
-      let lexer = skip_quoted_continuation_whitespace(lexer)
-      case peek(lexer) {
-        Some("\n") | Some("\r") -> read_single_quoted_loop(lexer, acc <> "\n")
-        _ -> read_single_quoted_loop(lexer, acc <> " ")
+      // Check for document markers at column 0
+      case check_document_marker(lexer) {
+        True ->
+          Error(
+            "Unterminated single-quoted string (document marker in quoted string)",
+          )
+        False -> {
+          let lexer = skip_quoted_continuation_whitespace(lexer)
+          case peek(lexer) {
+            Some("\n") | Some("\r") ->
+              read_single_quoted_loop(lexer, acc <> "\n", True)
+            _ -> read_single_quoted_loop(lexer, acc <> " ", True)
+          }
+        }
       }
     }
-    Some(c) -> read_single_quoted_loop(advance(lexer), acc <> c)
+    Some(c) -> read_single_quoted_loop(advance(lexer), acc <> c, multiline)
+  }
+}
+
+/// Check if a multiline quoted string is being used as an implicit mapping key.
+/// If so, error in block context. In flow context, multiline keys are allowed.
+fn check_multiline_implicit_key(
+  lexer: Lexer,
+  token: Token,
+) -> Result(#(Token, Lexer), String) {
+  // In flow context, multiline quoted keys are allowed
+  case lexer.flow_level > 0 {
+    True -> Ok(#(token, lexer))
+    False -> {
+      // Skip spaces (not newlines) to check for colon
+      let check_lexer = skip_inline_spaces(lexer)
+      case peek(check_lexer) {
+        Some(":") -> {
+          // Check if followed by whitespace or end (mapping indicator)
+          let after_colon = advance(check_lexer)
+          case peek(after_colon) {
+            Some(" ") | Some("\n") | Some("\r") | Some("\t") | None ->
+              Error("Multiline quoted string cannot be used as an implicit key")
+            // In flow context, colon before flow indicators is also a separator
+            Some(",") | Some("]") | Some("}") ->
+              Error("Multiline quoted string cannot be used as an implicit key")
+            _ -> Ok(#(token, lexer))
+          }
+        }
+        _ -> Ok(#(token, lexer))
+      }
+    }
+  }
+}
+
+fn skip_inline_spaces(lexer: Lexer) -> Lexer {
+  case peek(lexer) {
+    Some(" ") -> skip_inline_spaces(advance(lexer))
+    _ -> lexer
+  }
+}
+
+/// Check if the current position starts with a document marker (--- or ...) at column 0.
+fn check_document_marker(lexer: Lexer) -> Bool {
+  case peek_n(lexer, 3) {
+    "---" | "..." -> {
+      let after = advance_n(lexer, 3)
+      case peek(after) {
+        Some(" ") | Some("\n") | Some("\r") | Some("\t") | None -> True
+        _ -> False
+      }
+    }
+    _ -> False
   }
 }
 
@@ -417,7 +589,7 @@ fn skip_quoted_continuation_whitespace(lexer: Lexer) -> Lexer {
 
 fn read_double_quoted(lexer: Lexer) -> Result(#(Token, Lexer), String) {
   // pending_ws tracks literal whitespace that may be trimmed if newline follows
-  read_double_quoted_loop(lexer, "", "")
+  read_double_quoted_loop(lexer, "", "", False)
 }
 
 /// Read double-quoted string with trailing whitespace handling.
@@ -426,11 +598,20 @@ fn read_double_quoted_loop(
   lexer: Lexer,
   acc: String,
   pending_ws: String,
+  multiline: Bool,
 ) -> Result(#(Token, Lexer), String) {
   case peek(lexer) {
     None -> Error("Unterminated double-quoted string")
     // Include pending whitespace before closing quote
-    Some("\"") -> Ok(#(DoubleQuoted(acc <> pending_ws), advance(lexer)))
+    Some("\"") ->
+      case multiline {
+        True ->
+          check_multiline_implicit_key(
+            advance(lexer),
+            DoubleQuoted(acc <> pending_ws),
+          )
+        False -> Ok(#(DoubleQuoted(acc <> pending_ws), advance(lexer)))
+      }
     Some("\\") -> {
       // Escape sequences flush pending whitespace (they're not trailing)
       let full_acc = acc <> pending_ws
@@ -438,50 +619,151 @@ fn read_double_quoted_loop(
       case peek(lexer) {
         None -> Error("Unterminated escape sequence")
         Some("n") ->
-          read_double_quoted_loop(advance(lexer), full_acc <> "\n", "")
+          read_double_quoted_loop(
+            advance(lexer),
+            full_acc <> "\n",
+            "",
+            multiline,
+          )
         Some("t") ->
-          read_double_quoted_loop(advance(lexer), full_acc <> "\t", "")
+          read_double_quoted_loop(
+            advance(lexer),
+            full_acc <> "\t",
+            "",
+            multiline,
+          )
         Some("r") ->
-          read_double_quoted_loop(advance(lexer), full_acc <> "\r", "")
+          read_double_quoted_loop(
+            advance(lexer),
+            full_acc <> "\r",
+            "",
+            multiline,
+          )
         Some("\\") ->
-          read_double_quoted_loop(advance(lexer), full_acc <> "\\", "")
+          read_double_quoted_loop(
+            advance(lexer),
+            full_acc <> "\\",
+            "",
+            multiline,
+          )
         Some("\"") ->
-          read_double_quoted_loop(advance(lexer), full_acc <> "\"", "")
+          read_double_quoted_loop(
+            advance(lexer),
+            full_acc <> "\"",
+            "",
+            multiline,
+          )
         Some("/") ->
-          read_double_quoted_loop(advance(lexer), full_acc <> "/", "")
+          read_double_quoted_loop(
+            advance(lexer),
+            full_acc <> "/",
+            "",
+            multiline,
+          )
         Some("0") ->
-          read_double_quoted_loop(advance(lexer), full_acc <> "\u{0000}", "")
+          read_double_quoted_loop(
+            advance(lexer),
+            full_acc <> "\u{0000}",
+            "",
+            multiline,
+          )
         Some("a") ->
-          read_double_quoted_loop(advance(lexer), full_acc <> "\u{0007}", "")
+          read_double_quoted_loop(
+            advance(lexer),
+            full_acc <> "\u{0007}",
+            "",
+            multiline,
+          )
         Some("b") ->
-          read_double_quoted_loop(advance(lexer), full_acc <> "\u{0008}", "")
+          read_double_quoted_loop(
+            advance(lexer),
+            full_acc <> "\u{0008}",
+            "",
+            multiline,
+          )
         Some("e") ->
-          read_double_quoted_loop(advance(lexer), full_acc <> "\u{001B}", "")
+          read_double_quoted_loop(
+            advance(lexer),
+            full_acc <> "\u{001B}",
+            "",
+            multiline,
+          )
         Some("f") ->
-          read_double_quoted_loop(advance(lexer), full_acc <> "\u{000C}", "")
+          read_double_quoted_loop(
+            advance(lexer),
+            full_acc <> "\u{000C}",
+            "",
+            multiline,
+          )
         Some("v") ->
-          read_double_quoted_loop(advance(lexer), full_acc <> "\u{000B}", "")
+          read_double_quoted_loop(
+            advance(lexer),
+            full_acc <> "\u{000B}",
+            "",
+            multiline,
+          )
         Some("N") ->
-          read_double_quoted_loop(advance(lexer), full_acc <> "\u{0085}", "")
+          read_double_quoted_loop(
+            advance(lexer),
+            full_acc <> "\u{0085}",
+            "",
+            multiline,
+          )
         Some("_") ->
-          read_double_quoted_loop(advance(lexer), full_acc <> "\u{00A0}", "")
+          read_double_quoted_loop(
+            advance(lexer),
+            full_acc <> "\u{00A0}",
+            "",
+            multiline,
+          )
         Some("L") ->
-          read_double_quoted_loop(advance(lexer), full_acc <> "\u{2028}", "")
+          read_double_quoted_loop(
+            advance(lexer),
+            full_acc <> "\u{2028}",
+            "",
+            multiline,
+          )
         Some("P") ->
-          read_double_quoted_loop(advance(lexer), full_acc <> "\u{2029}", "")
+          read_double_quoted_loop(
+            advance(lexer),
+            full_acc <> "\u{2029}",
+            "",
+            multiline,
+          )
         Some(" ") ->
-          read_double_quoted_loop(advance(lexer), full_acc <> " ", "")
-        Some("x") -> read_hex_escape(advance(lexer), full_acc, 2)
-        Some("u") -> read_hex_escape(advance(lexer), full_acc, 4)
-        Some("U") -> read_hex_escape(advance(lexer), full_acc, 8)
+          read_double_quoted_loop(
+            advance(lexer),
+            full_acc <> " ",
+            "",
+            multiline,
+          )
+        Some("x") -> read_hex_escape(advance(lexer), full_acc, 2, multiline)
+        Some("u") -> read_hex_escape(advance(lexer), full_acc, 4, multiline)
+        Some("U") -> read_hex_escape(advance(lexer), full_acc, 8, multiline)
         // Line continuation - skip newline and leading whitespace on next line
         // Note: pending_ws is preserved (it's before the \, not trailing)
-        Some("\n") -> skip_line_continuation(advance(lexer), full_acc)
+        Some("\n") -> {
+          let next_lexer = advance(lexer)
+          case check_document_marker(next_lexer) {
+            True ->
+              Error(
+                "Unterminated double-quoted string (document marker in quoted string)",
+              )
+            False -> skip_line_continuation(next_lexer, full_acc)
+          }
+        }
         Some("\r") -> {
           let lexer = advance(lexer)
-          case peek(lexer) {
-            Some("\n") -> skip_line_continuation(advance(lexer), full_acc)
-            _ -> skip_line_continuation(lexer, full_acc)
+          let next_lexer = case peek(lexer) {
+            Some("\n") -> advance(lexer)
+            _ -> lexer
+          }
+          case check_document_marker(next_lexer) {
+            True ->
+              Error(
+                "Unterminated double-quoted string (document marker in quoted string)",
+              )
+            False -> skip_line_continuation(next_lexer, full_acc)
           }
         }
         Some(c) -> Error("Invalid escape sequence: \\" <> c)
@@ -490,9 +772,17 @@ fn read_double_quoted_loop(
     // Handle unescaped newlines - fold to space, discard pending_ws (trailing whitespace)
     Some("\n") -> {
       let lexer = advance(lexer)
-      let lexer = skip_quoted_continuation_whitespace(lexer)
-      // Check for blank lines (each becomes \n)
-      handle_double_quoted_fold(lexer, acc, "")
+      case check_document_marker(lexer) {
+        True ->
+          Error(
+            "Unterminated double-quoted string (document marker in quoted string)",
+          )
+        False -> {
+          let lexer = skip_quoted_continuation_whitespace(lexer)
+          // Check for blank lines (each becomes \n)
+          handle_double_quoted_fold(lexer, acc, "")
+        }
+      }
     }
     Some("\r") -> {
       let lexer = advance(lexer)
@@ -500,17 +790,36 @@ fn read_double_quoted_loop(
         Some("\n") -> advance(lexer)
         _ -> lexer
       }
-      let lexer = skip_quoted_continuation_whitespace(lexer)
-      // Check for blank lines (each becomes \n)
-      handle_double_quoted_fold(lexer, acc, "")
+      case check_document_marker(lexer) {
+        True ->
+          Error(
+            "Unterminated double-quoted string (document marker in quoted string)",
+          )
+        False -> {
+          let lexer = skip_quoted_continuation_whitespace(lexer)
+          // Check for blank lines (each becomes \n)
+          handle_double_quoted_fold(lexer, acc, "")
+        }
+      }
     }
     // Literal whitespace - add to pending_ws instead of acc
-    Some(" ") -> read_double_quoted_loop(advance(lexer), acc, pending_ws <> " ")
+    Some(" ") ->
+      read_double_quoted_loop(advance(lexer), acc, pending_ws <> " ", multiline)
     Some("\t") ->
-      read_double_quoted_loop(advance(lexer), acc, pending_ws <> "\t")
+      read_double_quoted_loop(
+        advance(lexer),
+        acc,
+        pending_ws <> "\t",
+        multiline,
+      )
     // Non-whitespace - flush pending_ws and add character
     Some(c) ->
-      read_double_quoted_loop(advance(lexer), acc <> pending_ws <> c, "")
+      read_double_quoted_loop(
+        advance(lexer),
+        acc <> pending_ws <> c,
+        "",
+        multiline,
+      )
   }
 }
 
@@ -522,7 +831,7 @@ fn skip_line_continuation(
   case peek(lexer) {
     Some(" ") -> skip_line_continuation(advance(lexer), acc)
     Some("\t") -> skip_line_continuation(advance(lexer), acc)
-    _ -> read_double_quoted_loop(lexer, acc, "")
+    _ -> read_double_quoted_loop(lexer, acc, "", True)
   }
 }
 
@@ -537,8 +846,16 @@ fn handle_double_quoted_fold(
     // Blank line - add newline and continue checking
     Some("\n") -> {
       let lexer = advance(lexer)
-      let lexer = skip_quoted_continuation_whitespace(lexer)
-      handle_double_quoted_fold(lexer, acc, newlines <> "\n")
+      case check_document_marker(lexer) {
+        True ->
+          Error(
+            "Unterminated double-quoted string (document marker in quoted string)",
+          )
+        False -> {
+          let lexer = skip_quoted_continuation_whitespace(lexer)
+          handle_double_quoted_fold(lexer, acc, newlines <> "\n")
+        }
+      }
     }
     Some("\r") -> {
       let lexer = advance(lexer)
@@ -546,14 +863,22 @@ fn handle_double_quoted_fold(
         Some("\n") -> advance(lexer)
         _ -> lexer
       }
-      let lexer = skip_quoted_continuation_whitespace(lexer)
-      handle_double_quoted_fold(lexer, acc, newlines <> "\n")
+      case check_document_marker(lexer) {
+        True ->
+          Error(
+            "Unterminated double-quoted string (document marker in quoted string)",
+          )
+        False -> {
+          let lexer = skip_quoted_continuation_whitespace(lexer)
+          handle_double_quoted_fold(lexer, acc, newlines <> "\n")
+        }
+      }
     }
     // Content found - add accumulated newlines or fold to space
     _ -> {
       case newlines {
-        "" -> read_double_quoted_loop(lexer, acc <> " ", "")
-        _ -> read_double_quoted_loop(lexer, acc <> newlines, "")
+        "" -> read_double_quoted_loop(lexer, acc <> " ", "", True)
+        _ -> read_double_quoted_loop(lexer, acc <> newlines, "", True)
       }
     }
   }
@@ -563,6 +888,7 @@ fn read_hex_escape(
   lexer: Lexer,
   acc: String,
   digits: Int,
+  multiline: Bool,
 ) -> Result(#(Token, Lexer), String) {
   case read_hex_digits(lexer, "", digits) {
     Error(e) -> Error(e)
@@ -575,6 +901,7 @@ fn read_hex_escape(
                 lexer,
                 acc <> string.from_utf_codepoints([cp]),
                 "",
+                multiline,
               )
             Error(_) -> Error("Invalid unicode codepoint: " <> hex_str)
           }
@@ -703,8 +1030,16 @@ fn read_plain_scalar_loop(
 /// Read a literal block scalar (|)
 fn read_literal_block(lexer: Lexer) -> Result(#(Token, Lexer), String) {
   // Skip chomping/indentation indicators and comments until newline
-  let #(header, lexer) = read_block_header(lexer)
+  case read_block_header(lexer) {
+    Error(e) -> Error(e)
+    Ok(#(header, lexer)) -> read_literal_block_content(header, lexer)
+  }
+}
 
+fn read_literal_block_content(
+  header: BlockHeader,
+  lexer: Lexer,
+) -> Result(#(Token, Lexer), String) {
   // Skip to end of header line
   let lexer = skip_to_eol(lexer)
 
@@ -734,30 +1069,38 @@ fn read_literal_block(lexer: Lexer) -> Result(#(Token, Lexer), String) {
 /// Read a folded block scalar (>)
 fn read_folded_block(lexer: Lexer) -> Result(#(Token, Lexer), String) {
   // Skip chomping/indentation indicators and comments until newline
-  let #(header, lexer) = read_block_header(lexer)
+  case read_block_header(lexer) {
+    Error(e) -> Error(e)
+    Ok(#(header, lexer)) -> {
+      // Skip to end of header line
+      let lexer = skip_to_eol(lexer)
 
-  // Skip to end of header line
-  let lexer = skip_to_eol(lexer)
-
-  // Skip the newline
-  case peek(lexer) {
-    Some("\n") -> {
-      let lexer = advance(lexer)
-      read_folded_content(lexer, header.chomping, header.explicit_indent)
-    }
-    Some("\r") -> {
-      let lexer = advance(lexer)
+      // Skip the newline
       case peek(lexer) {
-        Some("\n") ->
-          read_folded_content(
-            advance(lexer),
-            header.chomping,
-            header.explicit_indent,
-          )
-        _ -> read_folded_content(lexer, header.chomping, header.explicit_indent)
+        Some("\n") -> {
+          let lexer = advance(lexer)
+          read_folded_content(lexer, header.chomping, header.explicit_indent)
+        }
+        Some("\r") -> {
+          let lexer = advance(lexer)
+          case peek(lexer) {
+            Some("\n") ->
+              read_folded_content(
+                advance(lexer),
+                header.chomping,
+                header.explicit_indent,
+              )
+            _ ->
+              read_folded_content(
+                lexer,
+                header.chomping,
+                header.explicit_indent,
+              )
+          }
+        }
+        _ -> Ok(#(Folded(""), lexer))
       }
     }
-    _ -> Ok(#(Folded(""), lexer))
   }
 }
 
@@ -775,77 +1118,97 @@ type BlockHeader {
   BlockHeader(chomping: Chomping, explicit_indent: Option(Int))
 }
 
-fn read_block_header(lexer: Lexer) -> #(BlockHeader, Lexer) {
-  read_block_header_loop(lexer, BlockHeader(Clip, None))
+fn read_block_header(lexer: Lexer) -> Result(#(BlockHeader, Lexer), String) {
+  read_block_header_loop(lexer, BlockHeader(Clip, None), False)
 }
 
 fn read_block_header_loop(
   lexer: Lexer,
   header: BlockHeader,
-) -> #(BlockHeader, Lexer) {
+  saw_whitespace: Bool,
+) -> Result(#(BlockHeader, Lexer), String) {
   case peek(lexer) {
     Some("-") ->
       read_block_header_loop(
         advance(lexer),
         BlockHeader(..header, chomping: Strip),
+        False,
       )
     Some("+") ->
       read_block_header_loop(
         advance(lexer),
         BlockHeader(..header, chomping: Keep),
+        False,
       )
+    Some("0") -> Error("Block scalar indentation indicator must be 1-9, got 0")
     Some("1") ->
       read_block_header_loop(
         advance(lexer),
         BlockHeader(..header, explicit_indent: Some(1)),
+        False,
       )
     Some("2") ->
       read_block_header_loop(
         advance(lexer),
         BlockHeader(..header, explicit_indent: Some(2)),
+        False,
       )
     Some("3") ->
       read_block_header_loop(
         advance(lexer),
         BlockHeader(..header, explicit_indent: Some(3)),
+        False,
       )
     Some("4") ->
       read_block_header_loop(
         advance(lexer),
         BlockHeader(..header, explicit_indent: Some(4)),
+        False,
       )
     Some("5") ->
       read_block_header_loop(
         advance(lexer),
         BlockHeader(..header, explicit_indent: Some(5)),
+        False,
       )
     Some("6") ->
       read_block_header_loop(
         advance(lexer),
         BlockHeader(..header, explicit_indent: Some(6)),
+        False,
       )
     Some("7") ->
       read_block_header_loop(
         advance(lexer),
         BlockHeader(..header, explicit_indent: Some(7)),
+        False,
       )
     Some("8") ->
       read_block_header_loop(
         advance(lexer),
         BlockHeader(..header, explicit_indent: Some(8)),
+        False,
       )
     Some("9") ->
       read_block_header_loop(
         advance(lexer),
         BlockHeader(..header, explicit_indent: Some(9)),
+        False,
       )
-    Some(" ") | Some("\t") -> read_block_header_loop(advance(lexer), header)
+    Some(" ") | Some("\t") ->
+      read_block_header_loop(advance(lexer), header, True)
     Some("#") -> {
-      // Skip comment
-      let lexer = skip_to_eol(lexer)
-      #(header, lexer)
+      case saw_whitespace {
+        True -> {
+          let lexer = skip_to_eol(lexer)
+          Ok(#(header, lexer))
+        }
+        False ->
+          Error("Comment in block scalar header must be preceded by whitespace")
+      }
     }
-    _ -> #(header, lexer)
+    Some("\n") | Some("\r") | None -> Ok(#(header, lexer))
+    Some(c) -> Error("Invalid character in block scalar header: " <> c)
   }
 }
 
@@ -887,15 +1250,18 @@ fn read_literal_content(
     FoundContent(detected_indent, lexer) -> {
       // For extra space calculation, use explicit indent if provided
       // This allows content to start with leading spaces preserved
-      let base_indent = case explicit_indent {
-        Some(n) -> n
-        None -> detected_indent
+      let #(boundary_indent, base_indent) = case explicit_indent {
+        Some(n) -> {
+          let boundary = find_min_block_indent(lexer, detected_indent, n)
+          #(boundary, boundary)
+        }
+        None -> #(detected_indent, detected_indent)
       }
       // Start with the leading empty lines
       let prefix = string.repeat("\n", leading_newlines)
-      // Use detected_indent for block boundaries, base_indent for extra space calculation
+      // Use boundary_indent for block boundaries, base_indent for extra space calculation
       let #(content, lexer) =
-        read_literal_lines_ex(lexer, detected_indent, base_indent, prefix)
+        read_literal_lines_ex(lexer, boundary_indent, base_indent, prefix)
       let content = apply_chomping(content, chomping)
       Ok(#(Literal(content), lexer))
     }
@@ -1014,6 +1380,20 @@ fn find_block_indent(lexer: Lexer) -> BlockIndentResult {
   }
 }
 
+/// Check if current position starts with --- or ... followed by space/tab/newline/EOF.
+fn is_doc_marker(lexer: Lexer) -> Bool {
+  case peek_n(lexer, 3) {
+    "---" | "..." -> {
+      let after = advance_n(lexer, 3)
+      case peek(after) {
+        Some(" ") | Some("\t") | Some("\n") | Some("\r") | None -> True
+        _ -> False
+      }
+    }
+    _ -> False
+  }
+}
+
 /// Check if the content at this position terminates a block scalar.
 /// This includes mapping keys (word followed by colon) and document markers.
 fn is_block_terminator(lexer: Lexer) -> Bool {
@@ -1047,6 +1427,74 @@ fn count_leading_spaces(lexer: Lexer, count: Int) -> #(Int, Lexer) {
   case peek(lexer) {
     Some(" ") -> count_leading_spaces(advance(lexer), count + 1)
     _ -> #(count, lexer)
+  }
+}
+
+/// Find the minimum indent in the block content when explicit indent is given.
+fn find_min_block_indent(lexer: Lexer, current_min: Int, explicit: Int) -> Int {
+  find_min_block_indent_loop(lexer, current_min, explicit)
+}
+
+fn find_min_block_indent_loop(
+  lexer: Lexer,
+  current_min: Int,
+  explicit: Int,
+) -> Int {
+  let #(indent, after_spaces) = count_leading_spaces(lexer, 0)
+  case peek(after_spaces) {
+    // Empty line - skip
+    Some("\n") ->
+      find_min_block_indent_loop(advance(after_spaces), current_min, explicit)
+    Some("\r") -> {
+      let next = advance(after_spaces)
+      case peek(next) {
+        Some("\n") ->
+          find_min_block_indent_loop(advance(next), current_min, explicit)
+        _ -> find_min_block_indent_loop(next, current_min, explicit)
+      }
+    }
+    None -> current_min
+    Some(_) -> {
+      case indent {
+        0 -> current_min
+        _ if indent > explicit -> {
+          let new_min = case indent < current_min {
+            True -> indent
+            False -> current_min
+          }
+          skip_line_and_continue(after_spaces, new_min, explicit)
+        }
+        _ -> {
+          case is_block_terminator(after_spaces) {
+            True -> current_min
+            False -> {
+              let new_min = case indent < current_min {
+                True -> indent
+                False -> current_min
+              }
+              skip_line_and_continue(after_spaces, new_min, explicit)
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+fn skip_line_and_continue(lexer: Lexer, current_min: Int, explicit: Int) -> Int {
+  let #(_, after_line) = read_until_newline(lexer)
+  case peek(after_line) {
+    Some("\n") ->
+      find_min_block_indent_loop(advance(after_line), current_min, explicit)
+    Some("\r") -> {
+      let next = advance(after_line)
+      case peek(next) {
+        Some("\n") ->
+          find_min_block_indent_loop(advance(next), current_min, explicit)
+        _ -> find_min_block_indent_loop(next, current_min, explicit)
+      }
+    }
+    _ -> current_min
   }
 }
 
@@ -1171,23 +1619,20 @@ fn check_literal_continuation_ex(
       // Check if indent is sufficient (using boundary_indent)
       case indent >= boundary_indent {
         True -> {
-          // Continue reading, include extra indentation (using base_indent)
-          let extra_indent = case indent > base_indent {
-            True -> string.repeat(" ", indent - base_indent)
-            False -> ""
-          }
-          let #(line, lexer) = read_until_eol(after_spaces, extra_indent)
-          let new_acc = acc <> "\n" <> line
-          case peek(lexer) {
-            Some("\n") ->
-              check_literal_continuation_ex(
-                advance(lexer),
-                boundary_indent,
-                base_indent,
-                new_acc,
-              )
-            Some("\r") -> {
-              let lexer = advance(lexer)
+          // At indent 0, check for document markers which terminate the block
+          case indent == 0 && is_doc_marker(after_spaces) {
+            True -> {
+              let backed_up = Lexer(..lexer, pos: lexer.pos - 1)
+              #(acc, backed_up)
+            }
+            False -> {
+              // Continue reading, include extra indentation (using base_indent)
+              let extra_indent = case indent > base_indent {
+                True -> string.repeat(" ", indent - base_indent)
+                False -> ""
+              }
+              let #(line, lexer) = read_until_eol(after_spaces, extra_indent)
+              let new_acc = acc <> "\n" <> line
               case peek(lexer) {
                 Some("\n") ->
                   check_literal_continuation_ex(
@@ -1196,16 +1641,28 @@ fn check_literal_continuation_ex(
                     base_indent,
                     new_acc,
                   )
-                _ ->
-                  check_literal_continuation_ex(
-                    lexer,
-                    boundary_indent,
-                    base_indent,
-                    new_acc,
-                  )
+                Some("\r") -> {
+                  let lexer = advance(lexer)
+                  case peek(lexer) {
+                    Some("\n") ->
+                      check_literal_continuation_ex(
+                        advance(lexer),
+                        boundary_indent,
+                        base_indent,
+                        new_acc,
+                      )
+                    _ ->
+                      check_literal_continuation_ex(
+                        lexer,
+                        boundary_indent,
+                        base_indent,
+                        new_acc,
+                      )
+                  }
+                }
+                _ -> #(new_acc, lexer)
               }
             }
-            _ -> #(new_acc, lexer)
           }
         }
         False -> {
@@ -1264,120 +1721,117 @@ fn read_folded_lines(
     }
     None -> #(acc, lexer)
     Some(_) -> {
-      case indent >= block_indent {
-        True -> {
-          // Check if this is a "more indented" line (indent > block_indent)
-          // Also treat lines starting with a tab as more-indented (for folding)
-          let starts_with_tab = peek(after_spaces) == Some("\t")
-          let is_more_indented = indent > block_indent || starts_with_tab
-          // Include extra indentation beyond block_indent
-          let extra_indent = string.repeat(" ", indent - block_indent)
-          // Read content with extra indent preserved
-          let #(line, lexer) = read_until_eol(after_spaces, extra_indent)
-
-          // Build the new accumulator
-          // Rules:
-          // - After blank + more-indented: add \n only if acc doesn't end with \n\n
-          //   (if it does, the previous more-indented line already provided the break)
-          // - After blank + normal: just append (blank's \n is separator)
-          // - After more-indented + anything: just append (\n already added after more-indented)
-          // - Normal + more-indented: add \n (line break before more-indented preserved)
-          // - Normal + normal: fold with space
-          let new_acc = case acc {
-            "" -> line
-            _ ->
-              case state, is_more_indented {
-                // After blank + more-indented: only add \n if not already doubled
-                FoldAfterBlank, True -> {
-                  case string.ends_with(acc, "\n\n") {
-                    // Already has double newline from more-indented + blank
-                    True -> acc <> line
-                    // Single newline from blank after normal line
-                    False -> acc <> "\n" <> line
-                  }
-                }
-                // After blank + normal: just append
-                FoldAfterBlank, False -> acc <> line
-                // After more-indented + anything: just append (\n already added)
-                FoldAfterMoreIndented, _ -> acc <> line
-                // Normal + more-indented: add \n (preserved line break)
-                FoldNormal, True -> acc <> "\n" <> line
-                // Normal + normal: fold with space
-                FoldNormal, False -> acc <> " " <> line
-              }
+      let should_continue = case indent >= block_indent {
+        True ->
+          case indent {
+            0 -> !is_doc_marker(after_spaces)
+            _ -> True
           }
-
-          // Peek at next line to determine how to continue
-          case peek(lexer) {
-            Some("\n") -> {
-              // If this was a more-indented line, add newline and set state
-              case is_more_indented {
-                True ->
-                  read_folded_lines(
-                    advance(lexer),
-                    block_indent,
-                    new_acc <> "\n",
-                    FoldAfterMoreIndented,
-                  )
-                False ->
-                  read_folded_lines(
-                    advance(lexer),
-                    block_indent,
-                    new_acc,
-                    FoldNormal,
-                  )
-              }
-            }
-            Some("\r") -> {
-              let lexer = advance(lexer)
-              case is_more_indented {
-                True -> {
-                  case peek(lexer) {
-                    Some("\n") ->
-                      read_folded_lines(
-                        advance(lexer),
-                        block_indent,
-                        new_acc <> "\n",
-                        FoldAfterMoreIndented,
-                      )
-                    _ ->
-                      read_folded_lines(
-                        lexer,
-                        block_indent,
-                        new_acc <> "\n",
-                        FoldAfterMoreIndented,
-                      )
-                  }
-                }
-                False -> {
-                  case peek(lexer) {
-                    Some("\n") ->
-                      read_folded_lines(
-                        advance(lexer),
-                        block_indent,
-                        new_acc,
-                        FoldNormal,
-                      )
-                    _ ->
-                      read_folded_lines(
-                        lexer,
-                        block_indent,
-                        new_acc,
-                        FoldNormal,
-                      )
-                  }
-                }
-              }
-            }
-            _ -> #(new_acc, lexer)
-          }
-        }
+        False -> False
+      }
+      case should_continue {
+        True ->
+          read_folded_lines_content(
+            after_spaces,
+            block_indent,
+            indent,
+            acc,
+            state,
+          )
         False -> {
           // Block ends - don't consume this line
           #(acc, lexer)
         }
       }
     }
+  }
+}
+
+fn read_folded_lines_content(
+  after_spaces: Lexer,
+  block_indent: Int,
+  indent: Int,
+  acc: String,
+  state: FoldState,
+) -> #(String, Lexer) {
+  // Check if this is a "more indented" line (indent > block_indent)
+  // Also treat lines starting with a tab as more-indented (for folding)
+  let starts_with_tab = peek(after_spaces) == Some("\t")
+  let is_more_indented = indent > block_indent || starts_with_tab
+  // Include extra indentation beyond block_indent
+  let extra_indent = string.repeat(" ", indent - block_indent)
+  // Read content with extra indent preserved
+  let #(line, lexer) = read_until_eol(after_spaces, extra_indent)
+
+  // Build the new accumulator
+  let new_acc = case acc {
+    "" -> line
+    _ ->
+      case state, is_more_indented {
+        FoldAfterBlank, True -> {
+          case string.ends_with(acc, "\n\n") {
+            True -> acc <> line
+            False -> acc <> "\n" <> line
+          }
+        }
+        FoldAfterBlank, False -> acc <> line
+        FoldAfterMoreIndented, _ -> acc <> line
+        FoldNormal, True -> acc <> "\n" <> line
+        FoldNormal, False -> acc <> " " <> line
+      }
+  }
+
+  // Peek at next line to determine how to continue
+  case peek(lexer) {
+    Some("\n") -> {
+      case is_more_indented {
+        True ->
+          read_folded_lines(
+            advance(lexer),
+            block_indent,
+            new_acc <> "\n",
+            FoldAfterMoreIndented,
+          )
+        False ->
+          read_folded_lines(advance(lexer), block_indent, new_acc, FoldNormal)
+      }
+    }
+    Some("\r") -> {
+      let lexer = advance(lexer)
+      case is_more_indented {
+        True -> {
+          case peek(lexer) {
+            Some("\n") ->
+              read_folded_lines(
+                advance(lexer),
+                block_indent,
+                new_acc <> "\n",
+                FoldAfterMoreIndented,
+              )
+            _ ->
+              read_folded_lines(
+                lexer,
+                block_indent,
+                new_acc <> "\n",
+                FoldAfterMoreIndented,
+              )
+          }
+        }
+        False -> {
+          case peek(lexer) {
+            Some("\n") ->
+              read_folded_lines(
+                advance(lexer),
+                block_indent,
+                new_acc,
+                FoldNormal,
+              )
+            _ -> read_folded_lines(lexer, block_indent, new_acc, FoldNormal)
+          }
+        }
+      }
+    }
+    _ -> #(new_acc, lexer)
   }
 }
 

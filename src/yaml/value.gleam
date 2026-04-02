@@ -21,8 +21,35 @@ pub type YamlValue {
   String(String)
   /// Sequence (list/array)
   Sequence(List(YamlValue))
-  /// Mapping (dictionary/object)
-  Mapping(Dict(String, YamlValue))
+  /// Mapping (dictionary/object) - preserves insertion order
+  Mapping(List(#(String, YamlValue)))
+}
+
+/// Insert or update a key-value pair in an ordered mapping list.
+/// Preserves insertion order: new keys are appended, existing keys are updated in-place.
+pub fn ordered_insert(
+  pairs: List(#(String, YamlValue)),
+  key: String,
+  val: YamlValue,
+) -> List(#(String, YamlValue)) {
+  case has_key(pairs, key) {
+    True ->
+      list.map(pairs, fn(p) {
+        case p.0 == key {
+          True -> #(key, val)
+          False -> p
+        }
+      })
+    False -> list.append(pairs, [#(key, val)])
+  }
+}
+
+fn has_key(pairs: List(#(String, a)), key: String) -> Bool {
+  case pairs {
+    [] -> False
+    [#(k, _), ..] if k == key -> True
+    [_, ..rest] -> has_key(rest, key)
+  }
 }
 
 /// Converts a YamlValue to a string representation.
@@ -44,7 +71,6 @@ pub fn to_string(value: YamlValue) -> String {
     Mapping(pairs) -> {
       let inner =
         pairs
-        |> dict.to_list
         |> list.map(fn(pair) { pair.0 <> ": " <> to_string(pair.1) })
         |> string.join(", ")
       "{" <> inner <> "}"
@@ -101,8 +127,16 @@ pub fn as_list(value: YamlValue) -> Option(List(YamlValue)) {
   }
 }
 
-/// Gets a value as a dict.
+/// Gets a value as a dict (converts from ordered list to dict).
 pub fn as_dict(value: YamlValue) -> Option(Dict(String, YamlValue)) {
+  case value {
+    Mapping(pairs) -> Some(dict.from_list(pairs))
+    _ -> None
+  }
+}
+
+/// Gets a value as an ordered list of key-value pairs.
+pub fn as_pairs(value: YamlValue) -> Option(List(#(String, YamlValue))) {
   case value {
     Mapping(pairs) -> Some(pairs)
     _ -> None
@@ -112,7 +146,7 @@ pub fn as_dict(value: YamlValue) -> Option(Dict(String, YamlValue)) {
 /// Gets a field from a mapping.
 pub fn get(value: YamlValue, key: String) -> Option(YamlValue) {
   case value {
-    Mapping(pairs) -> dict.get(pairs, key) |> option.from_result
+    Mapping(pairs) -> list.key_find(pairs, key) |> option.from_result
     _ -> None
   }
 }
