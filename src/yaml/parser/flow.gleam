@@ -438,94 +438,82 @@ pub fn parse_flow_key_with_colon(
   parser: Parser,
 ) -> Result(#(String, Parser), ParseError) {
   case current(parser) {
-    Some(lexer.Plain(s)) -> {
-      // Check if there's a colon followed by space/newline (end of key)
-      // or if the colon is part of the key (like in URLs)
-      let parser = advance(parser)
-      collect_flow_key_parts(parser, s)
-    }
-    Some(lexer.SingleQuoted(s)) -> Ok(#(s, advance(parser)))
-    Some(lexer.DoubleQuoted(s)) -> Ok(#(s, advance(parser)))
-    // Complex key: flow sequence as key like [d, e]: f
-    Some(lexer.BracketOpen) -> {
-      case parse_flow_sequence(advance(parser)) {
-        Ok(#(val, parser)) -> Ok(#(value_to_key_string(val), parser))
-        Error(e) -> Error(e)
-      }
-    }
-    // Complex key: flow mapping as key like {a: b}: c
-    Some(lexer.BraceOpen) -> {
-      case parse_flow_mapping(advance(parser)) {
-        Ok(#(val, parser)) -> Ok(#(value_to_key_string(val), parser))
-        Error(e) -> Error(e)
-      }
-    }
-    Some(lexer.Anchor(name)) -> {
-      let parser = advance(parser) |> skip_whitespace
-      // Handle anchor before complex key like &a [b, c]
-      case current(parser) {
-        Some(lexer.BracketOpen) -> {
-          case parse_flow_sequence(advance(parser)) {
-            Ok(#(val, parser)) -> {
-              let parser =
-                Parser(
-                  ..parser,
-                  anchors: dict.insert(parser.anchors, name, val),
-                )
-              Ok(#(value_to_key_string(val), parser))
-            }
-            Error(e) -> Error(e)
-          }
-        }
-        Some(lexer.BraceOpen) -> {
-          case parse_flow_mapping(advance(parser)) {
-            Ok(#(val, parser)) -> {
-              let parser =
-                Parser(
-                  ..parser,
-                  anchors: dict.insert(parser.anchors, name, val),
-                )
-              Ok(#(value_to_key_string(val), parser))
-            }
-            Error(e) -> Error(e)
-          }
-        }
-        _ -> {
-          case parse_flow_key_with_colon(parser) {
-            Ok(#(key, parser)) -> {
-              let parser =
-                Parser(
-                  ..parser,
-                  anchors: dict.insert(parser.anchors, name, value.String(key)),
-                )
-              Ok(#(key, parser))
-            }
-            Error(e) -> Error(e)
-          }
-        }
-      }
-    }
-    Some(lexer.Alias(name)) -> {
-      let parser = advance(parser)
-      case dict.get(parser.anchors, name) {
-        Ok(val) -> Ok(#(value_to_key_string(val), parser))
-        Error(_) -> Error(ParseError("Unknown anchor: " <> name, parser.pos))
-      }
-    }
-    Some(lexer.Tag(tag)) -> {
-      let parser = advance(parser) |> skip_whitespace
-      // Check if this is a string tag with empty content (used as key)
-      let is_str_tag =
-        tag == "!!str" || string.contains(tag, "tag:yaml.org,2002:str")
-      case current(parser), is_str_tag {
-        // String tag followed by colon = empty string key
-        Some(lexer.Colon), True -> Ok(#("", parser))
-        _, _ -> parse_flow_key_with_colon(parser)
-      }
-    }
-    // Empty key - Colon indicates the key is empty (null)
+    Some(lexer.Plain(s)) -> collect_flow_key_parts(advance(parser), s)
+    Some(lexer.SingleQuoted(s)) | Some(lexer.DoubleQuoted(s)) ->
+      Ok(#(s, advance(parser)))
+    Some(lexer.BracketOpen) ->
+      parse_flow_collection_key(parser, parse_flow_sequence)
+    Some(lexer.BraceOpen) ->
+      parse_flow_collection_key(parser, parse_flow_mapping)
+    Some(lexer.Anchor(name)) -> parse_anchored_flow_key(parser, name)
+    Some(lexer.Alias(name)) -> parse_alias_flow_key(parser, name)
+    Some(lexer.Tag(tag)) -> parse_tagged_flow_key(parser, tag)
     Some(lexer.Colon) -> Ok(#("", parser))
     _ -> Error(ParseError("Expected mapping key", parser.pos))
+  }
+}
+
+/// Parse a flow collection (sequence or mapping) as a mapping key.
+fn parse_flow_collection_key(
+  parser: Parser,
+  parse_fn: fn(Parser) -> Result(#(YamlValue, Parser), ParseError),
+) -> Result(#(String, Parser), ParseError) {
+  use #(val, parser) <- result.try(parse_fn(advance(parser)))
+  Ok(#(value_to_key_string(val), parser))
+}
+
+/// Parse an anchored flow key — the anchor may precede a flow collection or plain key.
+fn parse_anchored_flow_key(
+  parser: Parser,
+  name: String,
+) -> Result(#(String, Parser), ParseError) {
+  let parser = advance(parser) |> skip_whitespace
+  case current(parser) {
+    Some(lexer.BracketOpen) | Some(lexer.BraceOpen) -> {
+      let parse_fn = case current(parser) {
+        Some(lexer.BracketOpen) -> parse_flow_sequence
+        _ -> parse_flow_mapping
+      }
+      use #(val, parser) <- result.try(parse_fn(advance(parser)))
+      let parser =
+        Parser(..parser, anchors: dict.insert(parser.anchors, name, val))
+      Ok(#(value_to_key_string(val), parser))
+    }
+    _ -> {
+      use #(key, parser) <- result.try(parse_flow_key_with_colon(parser))
+      let parser =
+        Parser(
+          ..parser,
+          anchors: dict.insert(parser.anchors, name, value.String(key)),
+        )
+      Ok(#(key, parser))
+    }
+  }
+}
+
+/// Parse an alias reference as a flow mapping key.
+fn parse_alias_flow_key(
+  parser: Parser,
+  name: String,
+) -> Result(#(String, Parser), ParseError) {
+  let parser = advance(parser)
+  case dict.get(parser.anchors, name) {
+    Ok(val) -> Ok(#(value_to_key_string(val), parser))
+    Error(_) -> Error(ParseError("Unknown anchor: " <> name, parser.pos))
+  }
+}
+
+/// Parse a tagged flow mapping key.
+fn parse_tagged_flow_key(
+  parser: Parser,
+  tag: String,
+) -> Result(#(String, Parser), ParseError) {
+  let parser = advance(parser) |> skip_whitespace
+  let is_str_tag =
+    tag == "!!str" || string.contains(tag, "tag:yaml.org,2002:str")
+  case current(parser), is_str_tag {
+    Some(lexer.Colon), True -> Ok(#("", parser))
+    _, _ -> parse_flow_key_with_colon(parser)
   }
 }
 
