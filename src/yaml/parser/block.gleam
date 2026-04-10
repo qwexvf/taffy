@@ -116,10 +116,29 @@ fn parse_sequence_item_col(
 }
 
 /// Parse a block mapping starting from a key that was already parsed.
+/// `first_key_col` optionally specifies the column of the first key
+/// (for enforcing consistent indentation of subsequent keys).
 pub fn parse_block_mapping_from_key(
   first_key: String,
   parser: Parser,
   min_indent: Int,
+  parse_value_fn: ParseValueFn,
+) -> Result(#(YamlValue, Parser), ParseError) {
+  parse_block_mapping_from_key_col(
+    first_key,
+    parser,
+    min_indent,
+    None,
+    parse_value_fn,
+  )
+}
+
+/// Parse a block mapping with known first key column.
+pub fn parse_block_mapping_from_key_col(
+  first_key: String,
+  parser: Parser,
+  min_indent: Int,
+  first_key_col: Option(Int),
   parse_value_fn: ParseValueFn,
 ) -> Result(#(YamlValue, Parser), ParseError) {
   let parser = skip_spaces(parser)
@@ -128,7 +147,13 @@ pub fn parse_block_mapping_from_key(
   case parse_mapping_value(parser, min_indent, parse_value_fn) {
     Ok(#(first_val, parser)) -> {
       let initial = [#(first_key, first_val)]
-      parse_block_mapping_pairs(parser, min_indent, initial, parse_value_fn)
+      parse_block_mapping_pairs_col(
+        parser,
+        min_indent,
+        first_key_col,
+        initial,
+        parse_value_fn,
+      )
     }
     Error(e) -> Error(e)
   }
@@ -279,7 +304,9 @@ fn parse_mapping_value_after_newline(
       wrap_with_anchor(val, anchor, parser)
     }
 
-    Some(lexer.Anchor(name)) ->
+    // Anchor at indent 0 after newline: only valid as value if key_indent > 0
+    // If key_indent == 0, the anchor is at the same level as the key, not its value
+    Some(lexer.Anchor(name)) if key_indent > 0 ->
       parse_mapping_value_after_anchor(
         advance(parser) |> skip_spaces,
         key_indent,
@@ -329,6 +356,71 @@ fn parse_mapping_value_after_anchor(
         anchor_name,
         parse_value_fn,
       )
+    Some(lexer.Indent(n)) if n > key_indent -> {
+      // Check if the indented content starts with another anchor on a scalar
+      // (double anchor on same node is invalid)
+      let after_indent = advance(parser)
+      case current(after_indent) {
+        Some(lexer.Anchor(_)) -> {
+          // Peek ahead: if anchor is on a mapping key, it's OK (different node)
+          // If anchor is on a plain scalar (no colon after), it's a double anchor
+          let after_anchor = advance(after_indent) |> skip_spaces
+          case current(after_anchor) {
+            Some(lexer.Plain(_)) -> {
+              let after_plain = advance(after_anchor) |> skip_spaces
+              case current(after_plain) {
+                Some(lexer.Colon) ->
+                  // Anchor on mapping key - valid (different nodes)
+                  parse_and_register_anchor(
+                    parser,
+                    key_indent + 1,
+                    anchor_name,
+                    parse_value_fn,
+                  )
+                _ ->
+                  // Anchor on scalar value - double anchor
+                  Error(ParseError(
+                    "A node can only have one anchor",
+                    after_indent.pos,
+                  ))
+              }
+            }
+            Some(lexer.SingleQuoted(_)) | Some(lexer.DoubleQuoted(_)) -> {
+              let after_quoted = advance(after_anchor) |> skip_spaces
+              case current(after_quoted) {
+                Some(lexer.Colon) ->
+                  parse_and_register_anchor(
+                    parser,
+                    key_indent + 1,
+                    anchor_name,
+                    parse_value_fn,
+                  )
+                _ ->
+                  Error(ParseError(
+                    "A node can only have one anchor",
+                    after_indent.pos,
+                  ))
+              }
+            }
+            _ ->
+              // Not a mapping key pattern - assume valid (let parse_value handle it)
+              parse_and_register_anchor(
+                parser,
+                key_indent + 1,
+                anchor_name,
+                parse_value_fn,
+              )
+          }
+        }
+        _ ->
+          parse_and_register_anchor(
+            parser,
+            key_indent + 1,
+            anchor_name,
+            parse_value_fn,
+          )
+      }
+    }
     _ ->
       parse_and_register_anchor(
         parser,
@@ -504,6 +596,7 @@ fn parse_block_mapping_pairs_col(
             n,
             new_col,
             acc,
+            parser,
             parse_value_fn,
           )
         }
@@ -614,8 +707,10 @@ fn parse_indented_mapping_pair_col(
   indent_level: Int,
   mapping_col: Option(Int),
   acc: List(#(String, YamlValue)),
+  pre_indent_parser: Parser,
   parse_value_fn: ParseValueFn,
 ) -> Result(#(YamlValue, Parser), ParseError) {
+  let backtrack = Ok(#(value.Mapping(acc), pre_indent_parser))
   case current(parser) {
     Some(lexer.Colon) ->
       add_key_value_pair_col(
@@ -638,7 +733,6 @@ fn parse_indented_mapping_pair_col(
       )
 
     _ -> {
-      let saved_parser = parser
       case parse_mapping_key(parser) {
         Ok(#(key, parser)) -> {
           let parser = skip_spaces(parser)
@@ -653,10 +747,10 @@ fn parse_indented_mapping_pair_col(
                 acc,
                 parse_value_fn,
               )
-            _ -> Ok(#(value.Mapping(acc), saved_parser))
+            _ -> backtrack
           }
         }
-        Error(_) -> Ok(#(value.Mapping(acc), parser))
+        Error(_) -> backtrack
       }
     }
   }

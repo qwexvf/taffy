@@ -47,6 +47,7 @@ pub fn flow_whitespace_has_comment(parser: Parser) -> Bool {
 pub fn skip_flow_whitespace(parser: Parser) -> Result(Parser, types.ParseError) {
   case current(parser) {
     Some(lexer.Newline) -> {
+      let parser = Parser(..parser, flow_multiline: True)
       // After newline, at indent 0. Check flow_min_indent.
       case parser.flow_min_indent > 0 {
         True -> {
@@ -74,6 +75,7 @@ pub fn skip_flow_whitespace(parser: Parser) -> Result(Parser, types.ParseError) 
       }
     }
     Some(lexer.Indent(n)) -> {
+      let parser = Parser(..parser, flow_multiline: True)
       case n >= parser.flow_min_indent {
         True -> skip_flow_whitespace(advance(parser))
         False -> {

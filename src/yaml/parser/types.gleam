@@ -23,6 +23,11 @@ pub type Parser {
     /// Minimum indent level for flow content on continuation lines.
     /// Set when entering a flow collection from block context.
     flow_min_indent: Int,
+    /// True if the current flow collection crossed a line boundary.
+    flow_multiline: Bool,
+    /// Tag handles defined by %TAG directives for the current document.
+    /// Contains handles like "!prefix!" that map to tag prefixes.
+    tag_handles: List(String),
   )
 }
 
@@ -41,5 +46,7 @@ pub fn new(tokens: List(Token)) -> Parser {
     seq_entry_indent: None,
     in_inline_value: False,
     flow_min_indent: 0,
+    flow_multiline: False,
+    tag_handles: [],
   )
 }
