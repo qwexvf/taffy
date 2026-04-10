@@ -95,13 +95,29 @@ fn validate_directive(
 
 /// Consume YAML directives (%YAML, %TAG) before a document.
 /// Validates that directives are followed by a document start marker.
+/// Also records TAG handles for the current document.
 fn consume_directives(parser: Parser) -> Result(Parser, ParseError) {
+  // Reset tag handles at the start of each document's directives
+  let parser = Parser(..parser, tag_handles: [])
+  consume_directives_loop(parser)
+}
+
+fn consume_directives_loop(parser: Parser) -> Result(Parser, ParseError) {
   let parser = skip_newlines_and_comments(parser)
   case current(parser) {
     Some(lexer.Directive(d)) -> {
       let is_yaml_dir = string.starts_with(d, "YAML")
+      let is_tag_dir = string.starts_with(d, "TAG")
       // Validate %YAML directive format
       use _ <- result.try(validate_directive(d, is_yaml_dir, parser.pos))
+      // Record TAG handle
+      let parser = case is_tag_dir {
+        True -> {
+          let handle = extract_tag_handle(d)
+          Parser(..parser, tag_handles: [handle, ..parser.tag_handles])
+        }
+        False -> parser
+      }
       let parser = advance(parser)
       let parser = skip_newlines_and_comments(parser)
       // After directives, must have --- or more directives
@@ -110,7 +126,7 @@ fn consume_directives(parser: Parser) -> Result(Parser, ParseError) {
         Some(lexer.Directive(d2)) -> {
           case is_yaml_dir && string.starts_with(d2, "YAML") {
             True -> Error(ParseError("Duplicate %YAML directive", parser.pos))
-            False -> consume_directives(parser)
+            False -> consume_directives_loop(parser)
           }
         }
         Some(lexer.DocEnd) ->
@@ -127,6 +143,101 @@ fn consume_directives(parser: Parser) -> Result(Parser, ParseError) {
       }
     }
     _ -> Ok(parser)
+  }
+}
+
+/// Extract the tag handle from a TAG directive content.
+/// e.g., "TAG !prefix! tag:example.com,2011:" → "!prefix!"
+fn extract_tag_handle(directive_content: String) -> String {
+  // Skip "TAG " prefix
+  let after_tag = string.drop_start(directive_content, 4)
+  let trimmed = string.trim_start(after_tag)
+  // Handle is everything up to the next space
+  case string.split_once(trimmed, " ") {
+    Ok(#(handle, _)) -> handle
+    Error(_) -> trimmed
+  }
+}
+
+/// Validate that a tag's handle (e.g., !prefix! in !prefix!A) is defined.
+/// Default handles ! and !! are always valid. Custom handles need %TAG directives.
+fn validate_tag_handle(tag: String, parser: Parser) -> Result(Nil, ParseError) {
+  // Verbatim tags (!<...>) are always valid
+  case string.starts_with(tag, "!<") {
+    True -> Ok(Nil)
+    False -> {
+      // Non-specific tag ! is always valid
+      case tag == "!" {
+        True -> Ok(Nil)
+        False -> {
+          // !! (secondary handle) is always valid
+          case string.starts_with(tag, "!!") {
+            True -> Ok(Nil)
+            False -> {
+              // Check for custom handle pattern: !handle!suffix
+              // A custom handle starts with ! and contains another !
+              case extract_custom_handle(tag) {
+                option.None -> Ok(Nil)
+                option.Some(handle) -> {
+                  case list.contains(parser.tag_handles, handle) {
+                    True -> Ok(Nil)
+                    False ->
+                      Error(ParseError(
+                        "Undefined tag handle: " <> handle,
+                        parser.pos,
+                      ))
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+/// Extract a custom tag handle from a tag string.
+/// e.g., "!prefix!A" → Some("!prefix!"), "!foo" → None, "!!str" → None
+fn extract_custom_handle(tag: String) -> option.Option(String) {
+  // Must start with ! and have another ! somewhere after
+  case string.starts_with(tag, "!") {
+    False -> option.None
+    True -> {
+      // Find the second ! (after the first character)
+      let rest = string.drop_start(tag, 1)
+      case string.split_once(rest, "!") {
+        Ok(#(handle_body, _suffix)) -> option.Some("!" <> handle_body <> "!")
+        Error(_) -> option.None
+      }
+    }
+  }
+}
+
+/// Check for invalid anchor + mapping key on same line as `---`.
+/// `--- &anchor key: value` is ambiguous and should be rejected.
+fn check_doc_start_anchor(parser: Parser) -> Result(Nil, ParseError) {
+  case current(parser) {
+    // Anchor right after --- on same line
+    Some(lexer.Anchor(_)) -> {
+      let after_anchor = advance(parser) |> skip_spaces
+      case current(after_anchor) {
+        // Anchor followed by scalar that might be a mapping key
+        Some(lexer.Plain(_)) -> {
+          let after_plain = advance(after_anchor) |> skip_spaces
+          case current(after_plain) {
+            Some(lexer.Colon) ->
+              Error(ParseError(
+                "Anchor before mapping on document start line is ambiguous",
+                parser.pos,
+              ))
+            _ -> Ok(Nil)
+          }
+        }
+        _ -> Ok(Nil)
+      }
+    }
+    _ -> Ok(Nil)
   }
 }
 
@@ -154,10 +265,14 @@ fn parse_documents(
   case current(parser) {
     None | Some(lexer.Eof) -> Ok(list.reverse(acc))
     Some(lexer.DocStart) -> {
-      let parser = advance(parser) |> skip_newlines_and_comments
+      let after_doc_start = advance(parser)
+      // Check for invalid anchor + mapping on same line as ---
+      use _ <- result.try(check_doc_start_anchor(after_doc_start))
+      let parser = skip_newlines_and_comments(after_doc_start)
       case current(parser) {
         // Empty document followed by another doc start or doc end
-        Some(lexer.DocStart) -> parse_documents(parser, [value.Null, ..acc])
+        Some(lexer.DocStart) ->
+          parse_documents(Parser(..parser, tag_handles: []), [value.Null, ..acc])
         Some(lexer.DocEnd) -> {
           let parser = advance(parser)
           use parser <- result.try(check_after_doc_end(parser))
@@ -177,8 +292,9 @@ fn parse_documents(
               use parser <- result.try(consume_directives(parser))
               parse_documents(parser, [val, ..acc])
             }
-            Some(lexer.DocStart) | None | Some(lexer.Eof) ->
-              parse_documents(parser, [val, ..acc])
+            Some(lexer.DocStart) ->
+              parse_documents(Parser(..parser, tag_handles: []), [val, ..acc])
+            None | Some(lexer.Eof) -> parse_documents(parser, [val, ..acc])
             Some(token) ->
               Error(ParseError(
                 "Unexpected trailing content: " <> token_to_string(token),
@@ -212,7 +328,8 @@ fn parse_documents(
           use parser <- result.try(consume_directives(parser))
           parse_documents(parser, [val, ..acc])
         }
-        Some(lexer.DocStart) -> parse_documents(parser, [val, ..acc])
+        Some(lexer.DocStart) ->
+          parse_documents(Parser(..parser, tag_handles: []), [val, ..acc])
         None | Some(lexer.Eof) -> Ok(list.reverse([val, ..acc]))
         Some(token) ->
           Error(ParseError(
@@ -374,6 +491,8 @@ pub fn parse_value(
 
     // Handle tags - check if it's a string tag with truly no value
     Some(lexer.Tag(tag)) -> {
+      // Validate tag handle is defined
+      use _ <- result.try(validate_tag_handle(tag, parser))
       let parser = advance(parser) |> skip_spaces
       let is_str_tag =
         tag == "!!str" || string.contains(tag, "tag:yaml.org,2002:str")
@@ -407,20 +526,35 @@ pub fn parse_value(
 
     // Flow sequence - might be a mapping key
     Some(lexer.BracketOpen) -> {
-      let parser = Parser(..advance(parser), flow_min_indent: min_indent)
+      let parser =
+        Parser(
+          ..advance(parser),
+          flow_min_indent: min_indent,
+          flow_multiline: False,
+        )
       case flow.parse_flow_sequence(parser) {
         Ok(#(seq_val, parser)) -> {
+          let was_multiline = parser.flow_multiline
           let parser = skip_spaces(parser)
           case current(parser) {
-            // Flow sequence used as mapping key
+            // Flow sequence used as mapping key - reject if multiline
             Some(lexer.Colon) -> {
-              let key = scalar.value_to_key_string(seq_val)
-              block.parse_block_mapping_from_key(
-                key,
-                advance(parser),
-                min_indent,
-                parse_value,
-              )
+              case was_multiline {
+                True ->
+                  Error(ParseError(
+                    "Multiline flow sequence cannot be used as implicit mapping key",
+                    parser.pos,
+                  ))
+                False -> {
+                  let key = scalar.value_to_key_string(seq_val)
+                  block.parse_block_mapping_from_key(
+                    key,
+                    advance(parser),
+                    min_indent,
+                    parse_value,
+                  )
+                }
+              }
             }
             // After flow collection in block context, reject inline scalars
             Some(lexer.Plain(_))
@@ -762,10 +896,11 @@ fn parse_value_after_indent(
             | Some(lexer.BracketOpen)
             | Some(lexer.BraceOpen)
             | None ->
-              block.parse_block_mapping_from_key(
+              block.parse_block_mapping_from_key_col(
                 full_key,
                 after_colon,
                 n,
+                Some(n),
                 parse_value,
               )
             _ -> parse_value(parser, min_indent)
@@ -778,7 +913,13 @@ fn parse_value_after_indent(
       let kp = advance(parser) |> skip_spaces
       case current(kp) {
         Some(lexer.Colon) ->
-          block.parse_block_mapping_from_key(s, advance(kp), n, parse_value)
+          block.parse_block_mapping_from_key_col(
+            s,
+            advance(kp),
+            n,
+            Some(n),
+            parse_value,
+          )
         _ -> parse_value(parser, min_indent)
       }
     }

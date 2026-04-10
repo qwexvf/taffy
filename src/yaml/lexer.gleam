@@ -64,6 +64,8 @@ pub type Lexer {
     col: Int,
     in_document: Bool,
     flow_level: Int,
+    /// Column where the current quoted string opened (for indent validation).
+    quoted_open_col: Int,
   )
 }
 
@@ -76,6 +78,7 @@ pub fn new(input: String) -> Lexer {
     col: 0,
     in_document: False,
     flow_level: 0,
+    quoted_open_col: 0,
   )
 }
 
@@ -349,31 +352,55 @@ fn count_indent_loop(lexer: Lexer, count: Int) -> Result(#(Int, Lexer), String) 
   case peek(lexer) {
     Some(" ") -> count_indent_loop(advance(lexer), count + 1)
     Some("\t") ->
-      case lexer.flow_level > 0 {
-        // In flow context, tabs are fine
-        True -> count_indent_loop(advance(lexer), count + 1)
-        False ->
-          case count {
-            // Tab as first character of indentation
-            0 -> {
-              // Check what follows the tab(s)
-              // Tabs before flow collections or non-indicator content are OK
-              // Tabs before block indicators (mapping key, sequence dash) are errors
-              let after_tabs = skip_tabs_lexer(advance(lexer))
-              case peek(after_tabs) {
-                // Block sequence/mapping/explicit key indicators after tab = error
-                Some("-") | Some("?") ->
+      case count {
+        // Tab as first character of indentation
+        0 -> {
+          // Skip all tabs (and spaces after tabs)
+          let after_tabs = skip_tabs_lexer(advance(lexer))
+          case peek(after_tabs) {
+            // EOF or newline after tab = just whitespace
+            None | Some("\n") | Some("\r") -> Ok(#(0, Lexer(..lexer, col: 0)))
+            // Block indicator after tab = tab used as indentation = error
+            Some("-") -> {
+              case peek_n(after_tabs, 3) {
+                "---" -> {
+                  // Could be doc start - treat tab as whitespace
+                  Ok(#(0, Lexer(..after_tabs, col: 0)))
+                }
+                _ -> {
+                  // Check if dash is an indicator (followed by whitespace/end)
+                  let after_dash = advance(after_tabs)
+                  case peek(after_dash) {
+                    Some(" ") | Some("\n") | Some("\r") | Some("\t") | None ->
+                      Error("Tabs are not allowed as indentation in YAML")
+                    _ ->
+                      // Not an indicator, just content (e.g., negative number)
+                      Ok(#(0, Lexer(..after_tabs, col: 0)))
+                  }
+                }
+              }
+            }
+            Some("?") -> {
+              let after_q = advance(after_tabs)
+              case peek(after_q) {
+                Some(" ") | Some("\n") | Some("\r") | Some("\t") | None ->
                   Error("Tabs are not allowed as indentation in YAML")
-                // EOF or newline after tab = just whitespace
-                None | Some("\n") | Some("\r") ->
-                  Ok(#(0, Lexer(..lexer, col: 0)))
-                // Everything else (flow, scalars, etc.) = tab is just whitespace
                 _ -> Ok(#(0, Lexer(..after_tabs, col: 0)))
               }
             }
-            // Tab after spaces - stop counting, tab is content/inline whitespace
-            _ -> Ok(#(count, Lexer(..lexer, col: count)))
+            // Content after tab that looks like a mapping key = error
+            _ -> {
+              case has_mapping_indicator_after_tab(after_tabs) {
+                True -> Error("Tabs are not allowed as indentation in YAML")
+                False ->
+                  // Flow collections, plain scalars etc. at indent 0
+                  Ok(#(0, Lexer(..after_tabs, col: 0)))
+              }
+            }
           }
+        }
+        // Tab after spaces - stop counting, tab is content/inline whitespace
+        _ -> Ok(#(count, Lexer(..lexer, col: count)))
       }
     _ -> Ok(#(count, Lexer(..lexer, col: count)))
   }
@@ -384,6 +411,40 @@ fn skip_tabs_lexer(lexer: Lexer) -> Lexer {
     Some("\t") -> skip_tabs_lexer(advance(lexer))
     Some(" ") -> skip_tabs_lexer(advance(lexer))
     _ -> lexer
+  }
+}
+
+/// Check if content after tab looks like a mapping key (word followed by colon)
+fn has_mapping_indicator_after_tab(lexer: Lexer) -> Bool {
+  case peek(lexer) {
+    None | Some("\n") | Some("\r") -> False
+    Some(":") -> {
+      // Colon at start - check if it's a mapping indicator
+      case peek(advance(lexer)) {
+        Some(" ") | Some("\t") | Some("\n") | Some("\r") | None -> True
+        _ -> False
+      }
+    }
+    // Flow indicators - not a mapping key, tabs OK
+    Some("[") | Some("]") | Some("{") | Some("}") -> False
+    // Quote characters - check if quoted string becomes a mapping key
+    Some("'") | Some("\"") -> False
+    // Other content - scan forward to check for colon
+    _ -> scan_for_mapping_colon(advance(lexer))
+  }
+}
+
+/// Scan forward on the same line to check if this looks like a mapping key
+fn scan_for_mapping_colon(lexer: Lexer) -> Bool {
+  case peek(lexer) {
+    None | Some("\n") | Some("\r") -> False
+    Some(":") -> {
+      case peek(advance(lexer)) {
+        Some(" ") | Some("\t") | Some("\n") | Some("\r") | None -> True
+        _ -> scan_for_mapping_colon(advance(lexer))
+      }
+    }
+    _ -> scan_for_mapping_colon(advance(lexer))
   }
 }
 
@@ -587,9 +648,44 @@ fn skip_quoted_continuation_whitespace(lexer: Lexer) -> Lexer {
   }
 }
 
+/// Count leading spaces on a continuation line (for indent checking).
+/// Returns the indent level and the lexer positioned after the spaces.
+fn count_continuation_indent(lexer: Lexer) -> #(Int, Lexer) {
+  count_continuation_indent_loop(lexer, 0)
+}
+
+fn count_continuation_indent_loop(lexer: Lexer, count: Int) -> #(Int, Lexer) {
+  case peek(lexer) {
+    Some(" ") -> count_continuation_indent_loop(advance(lexer), count + 1)
+    Some("\t") -> count_continuation_indent_loop(advance(lexer), count + 1)
+    _ -> #(count, lexer)
+  }
+}
+
 fn read_double_quoted(lexer: Lexer) -> Result(#(Token, Lexer), String) {
   // pending_ws tracks literal whitespace that may be trimmed if newline follows
+  // Check if we're in a mapping value context (colon + space before the quote)
+  let in_mapping_value = is_after_mapping_colon(lexer)
+  let lexer =
+    Lexer(..lexer, quoted_open_col: case in_mapping_value {
+      True -> lexer.col
+      False -> 0
+    })
   read_double_quoted_loop(lexer, "", "", False)
+}
+
+/// Check if the current position is after a mapping colon (: followed by space).
+/// The lexer is positioned after the opening " was consumed.
+/// So pos-1 is the ", pos-2 is the space, pos-3 is the colon.
+fn is_after_mapping_colon(lexer: Lexer) -> Bool {
+  case lexer.pos >= 3 {
+    True -> {
+      let before_quote = string.slice(lexer.input, lexer.pos - 2, 1)
+      let before_space = string.slice(lexer.input, lexer.pos - 3, 1)
+      before_quote == " " && before_space == ":"
+    }
+    False -> False
+  }
 }
 
 /// Read double-quoted string with trailing whitespace handling.
@@ -778,9 +874,24 @@ fn read_double_quoted_loop(
             "Unterminated double-quoted string (document marker in quoted string)",
           )
         False -> {
-          let lexer = skip_quoted_continuation_whitespace(lexer)
-          // Check for blank lines (each becomes \n)
-          handle_double_quoted_fold(lexer, acc, "")
+          let #(indent, lexer) = count_continuation_indent(lexer)
+          // In block context, continuation must be indented if string opened
+          // at a non-zero column (i.e., it's inside a mapping value)
+          case
+            lexer.flow_level == 0 && indent == 0 && lexer.quoted_open_col > 0
+          {
+            True ->
+              case peek(lexer) {
+                // Blank line, closing quote, or EOF - OK
+                Some("\n") | Some("\r") | Some("\"") | None ->
+                  handle_double_quoted_fold(lexer, acc, "")
+                _ ->
+                  Error(
+                    "Multiline double-quoted scalar continuation must be indented",
+                  )
+              }
+            False -> handle_double_quoted_fold(lexer, acc, "")
+          }
         }
       }
     }
@@ -796,9 +907,21 @@ fn read_double_quoted_loop(
             "Unterminated double-quoted string (document marker in quoted string)",
           )
         False -> {
-          let lexer = skip_quoted_continuation_whitespace(lexer)
-          // Check for blank lines (each becomes \n)
-          handle_double_quoted_fold(lexer, acc, "")
+          let #(indent, lexer) = count_continuation_indent(lexer)
+          case
+            lexer.flow_level == 0 && indent == 0 && lexer.quoted_open_col > 0
+          {
+            True ->
+              case peek(lexer) {
+                Some("\n") | Some("\r") | Some("\"") | None ->
+                  handle_double_quoted_fold(lexer, acc, "")
+                _ ->
+                  Error(
+                    "Multiline double-quoted scalar continuation must be indented",
+                  )
+              }
+            False -> handle_double_quoted_fold(lexer, acc, "")
+          }
         }
       }
     }
@@ -852,7 +975,7 @@ fn handle_double_quoted_fold(
             "Unterminated double-quoted string (document marker in quoted string)",
           )
         False -> {
-          let lexer = skip_quoted_continuation_whitespace(lexer)
+          let #(_indent, lexer) = count_continuation_indent(lexer)
           handle_double_quoted_fold(lexer, acc, newlines <> "\n")
         }
       }
@@ -869,7 +992,7 @@ fn handle_double_quoted_fold(
             "Unterminated double-quoted string (document marker in quoted string)",
           )
         False -> {
-          let lexer = skip_quoted_continuation_whitespace(lexer)
+          let #(_indent, lexer) = count_continuation_indent(lexer)
           handle_double_quoted_fold(lexer, acc, newlines <> "\n")
         }
       }
@@ -1227,10 +1350,12 @@ fn read_literal_content(
   explicit_indent: Option(Int),
 ) -> Result(#(Token, Lexer), String) {
   // Count leading empty lines before the first content line
-  let #(leading_newlines, lexer) = count_leading_empty_lines(lexer, 0)
+  let #(leading_newlines, max_empty_indent, lexer) =
+    count_leading_empty_lines(lexer, 0, 0)
   // Always auto-detect indent from first non-empty line for block boundaries
   case find_block_indent(lexer) {
-    NoContent(end_lexer) -> {
+    Error(e) -> Error(e)
+    Ok(NoContent(end_lexer)) -> {
       // For empty block scalars, check if the "leading" empty lines were actually
       // followed by content (even if at insufficient indent) or by true EOF
       // If followed by content at indent 0 (block terminator), those lines aren't part of block
@@ -1247,23 +1372,29 @@ fn read_literal_content(
       }
       Ok(#(Literal(content), lexer))
     }
-    FoundContent(detected_indent, lexer) -> {
-      // For extra space calculation, use explicit indent if provided
-      // This allows content to start with leading spaces preserved
-      let #(boundary_indent, base_indent) = case explicit_indent {
-        Some(n) -> {
-          let boundary = find_min_block_indent(lexer, detected_indent, n)
-          #(boundary, boundary)
+    Ok(FoundContent(detected_indent, lexer)) -> {
+      // Leading empty lines must not have more spaces than the first content line
+      case max_empty_indent > detected_indent && detected_indent > 0 {
+        True -> Error("Leading empty line has too many spaces in block scalar")
+        False -> {
+          // For extra space calculation, use explicit indent if provided
+          // This allows content to start with leading spaces preserved
+          let #(boundary_indent, base_indent) = case explicit_indent {
+            Some(n) -> {
+              let boundary = find_min_block_indent(lexer, detected_indent, n)
+              #(boundary, boundary)
+            }
+            None -> #(detected_indent, detected_indent)
+          }
+          // Start with the leading empty lines
+          let prefix = string.repeat("\n", leading_newlines)
+          // Use boundary_indent for block boundaries, base_indent for extra space calculation
+          let #(content, lexer) =
+            read_literal_lines_ex(lexer, boundary_indent, base_indent, prefix)
+          let content = apply_chomping(content, chomping)
+          Ok(#(Literal(content), lexer))
         }
-        None -> #(detected_indent, detected_indent)
       }
-      // Start with the leading empty lines
-      let prefix = string.repeat("\n", leading_newlines)
-      // Use boundary_indent for block boundaries, base_indent for extra space calculation
-      let #(content, lexer) =
-        read_literal_lines_ex(lexer, boundary_indent, base_indent, prefix)
-      let content = apply_chomping(content, chomping)
-      Ok(#(Literal(content), lexer))
     }
   }
 }
@@ -1274,7 +1405,8 @@ fn read_folded_content(
   explicit_indent: Option(Int),
 ) -> Result(#(Token, Lexer), String) {
   // Count leading empty lines first (before finding content)
-  let #(leading_newlines, lexer) = count_leading_empty_lines(lexer, 0)
+  let #(leading_newlines, max_empty_indent, lexer) =
+    count_leading_empty_lines(lexer, 0, 0)
   let prefix = string.repeat("\n", leading_newlines)
   let initial_state = case leading_newlines > 0 {
     True -> FoldAfterBlank
@@ -1291,7 +1423,8 @@ fn read_folded_content(
     None -> {
       // Auto-detect indent from first non-empty line
       case find_block_indent(lexer) {
-        NoContent(end_lexer) -> {
+        Error(e) -> Error(e)
+        Ok(NoContent(end_lexer)) -> {
           // For empty block scalars, check if the "leading" empty lines were actually
           // followed by content (even if at insufficient indent) or by true EOF
           let actual_trailing = case peek(end_lexer) {
@@ -1307,11 +1440,18 @@ fn read_folded_content(
           }
           Ok(#(Folded(content), lexer))
         }
-        FoundContent(block_indent, lexer) -> {
-          let #(content, lexer) =
-            read_folded_lines(lexer, block_indent, prefix, initial_state)
-          let content = apply_chomping(content, chomping)
-          Ok(#(Folded(content), lexer))
+        Ok(FoundContent(block_indent, lexer)) -> {
+          // Leading empty lines must not have more spaces than first content line
+          case max_empty_indent > block_indent && block_indent > 0 {
+            True ->
+              Error("Leading empty line has too many spaces in block scalar")
+            False -> {
+              let #(content, lexer) =
+                read_folded_lines(lexer, block_indent, prefix, initial_state)
+              let content = apply_chomping(content, chomping)
+              Ok(#(Folded(content), lexer))
+            }
+          }
         }
       }
     }
@@ -1319,22 +1459,37 @@ fn read_folded_content(
 }
 
 /// Count leading empty lines (lines with only whitespace).
-fn count_leading_empty_lines(lexer: Lexer, count: Int) -> #(Int, Lexer) {
+/// Returns (count, max_indent_of_empty_lines, lexer).
+fn count_leading_empty_lines(
+  lexer: Lexer,
+  count: Int,
+  max_indent: Int,
+) -> #(Int, Int, Lexer) {
   // Count leading spaces
-  let #(_indent, lexer_after_spaces) = count_leading_spaces(lexer, 0)
+  let #(indent, lexer_after_spaces) = count_leading_spaces(lexer, 0)
   case peek(lexer_after_spaces) {
     // Empty line - count it and continue
-    Some("\n") ->
-      count_leading_empty_lines(advance(lexer_after_spaces), count + 1)
+    Some("\n") -> {
+      let new_max = case indent > max_indent {
+        True -> indent
+        False -> max_indent
+      }
+      count_leading_empty_lines(advance(lexer_after_spaces), count + 1, new_max)
+    }
     Some("\r") -> {
+      let new_max = case indent > max_indent {
+        True -> indent
+        False -> max_indent
+      }
       let lexer = advance(lexer_after_spaces)
       case peek(lexer) {
-        Some("\n") -> count_leading_empty_lines(advance(lexer), count + 1)
-        _ -> count_leading_empty_lines(lexer, count + 1)
+        Some("\n") ->
+          count_leading_empty_lines(advance(lexer), count + 1, new_max)
+        _ -> count_leading_empty_lines(lexer, count + 1, new_max)
       }
     }
     // Not an empty line - done counting
-    _ -> #(count, lexer)
+    _ -> #(count, max_indent, lexer)
   }
 }
 
@@ -1346,7 +1501,7 @@ type BlockIndentResult {
   NoContent(lexer: Lexer)
 }
 
-fn find_block_indent(lexer: Lexer) -> BlockIndentResult {
+fn find_block_indent(lexer: Lexer) -> Result(BlockIndentResult, String) {
   // Save the start position of this line
   let line_start = lexer
   // Count leading spaces
@@ -1361,6 +1516,9 @@ fn find_block_indent(lexer: Lexer) -> BlockIndentResult {
         _ -> find_block_indent(lexer)
       }
     }
+    // Tab at start of indentation (no spaces before it) - not allowed
+    Some("\t") if indent == 0 ->
+      Error("Tabs are not allowed as indentation in YAML")
     // Found content - check if it's valid block scalar content
     Some(_) -> {
       case indent {
@@ -1368,15 +1526,15 @@ fn find_block_indent(lexer: Lexer) -> BlockIndentResult {
         // If so, the block scalar is empty
         0 -> {
           case is_block_terminator(lexer_after_spaces) {
-            True -> NoContent(line_start)
-            False -> FoundContent(0, line_start)
+            True -> Ok(NoContent(line_start))
+            False -> Ok(FoundContent(0, line_start))
           }
         }
-        _ -> FoundContent(indent, line_start)
+        _ -> Ok(FoundContent(indent, line_start))
       }
     }
     // End of input
-    None -> NoContent(lexer_after_spaces)
+    None -> Ok(NoContent(lexer_after_spaces))
   }
 }
 
