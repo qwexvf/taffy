@@ -343,10 +343,8 @@ fn parse_mapping_value_after_anchor(
   parse_value_fn: ParseValueFn,
 ) -> Result(#(YamlValue, Parser), ParseError) {
   case current(parser) {
-    // Reject anchor followed by alias (can't anchor an alias reference)
     Some(lexer.Alias(_)) ->
       Error(ParseError("Cannot place an anchor on an alias", parser.pos))
-    // Reject double anchors
     Some(lexer.Anchor(_)) ->
       Error(ParseError("A node can only have one anchor", parser.pos))
     Some(lexer.Newline) ->
@@ -356,71 +354,13 @@ fn parse_mapping_value_after_anchor(
         anchor_name,
         parse_value_fn,
       )
-    Some(lexer.Indent(n)) if n > key_indent -> {
-      // Check if the indented content starts with another anchor on a scalar
-      // (double anchor on same node is invalid)
-      let after_indent = advance(parser)
-      case current(after_indent) {
-        Some(lexer.Anchor(_)) -> {
-          // Peek ahead: if anchor is on a mapping key, it's OK (different node)
-          // If anchor is on a plain scalar (no colon after), it's a double anchor
-          let after_anchor = advance(after_indent) |> skip_spaces
-          case current(after_anchor) {
-            Some(lexer.Plain(_)) -> {
-              let after_plain = advance(after_anchor) |> skip_spaces
-              case current(after_plain) {
-                Some(lexer.Colon) ->
-                  // Anchor on mapping key - valid (different nodes)
-                  parse_and_register_anchor(
-                    parser,
-                    key_indent + 1,
-                    anchor_name,
-                    parse_value_fn,
-                  )
-                _ ->
-                  // Anchor on scalar value - double anchor
-                  Error(ParseError(
-                    "A node can only have one anchor",
-                    after_indent.pos,
-                  ))
-              }
-            }
-            Some(lexer.SingleQuoted(_)) | Some(lexer.DoubleQuoted(_)) -> {
-              let after_quoted = advance(after_anchor) |> skip_spaces
-              case current(after_quoted) {
-                Some(lexer.Colon) ->
-                  parse_and_register_anchor(
-                    parser,
-                    key_indent + 1,
-                    anchor_name,
-                    parse_value_fn,
-                  )
-                _ ->
-                  Error(ParseError(
-                    "A node can only have one anchor",
-                    after_indent.pos,
-                  ))
-              }
-            }
-            _ ->
-              // Not a mapping key pattern - assume valid (let parse_value handle it)
-              parse_and_register_anchor(
-                parser,
-                key_indent + 1,
-                anchor_name,
-                parse_value_fn,
-              )
-          }
-        }
-        _ ->
-          parse_and_register_anchor(
-            parser,
-            key_indent + 1,
-            anchor_name,
-            parse_value_fn,
-          )
-      }
-    }
+    Some(lexer.Indent(n)) if n > key_indent ->
+      check_double_anchor_then_parse(
+        parser,
+        key_indent,
+        anchor_name,
+        parse_value_fn,
+      )
     _ ->
       parse_and_register_anchor(
         parser,
@@ -428,6 +368,58 @@ fn parse_mapping_value_after_anchor(
         anchor_name,
         parse_value_fn,
       )
+  }
+}
+
+/// Check for double anchors when an indented value starts with another anchor.
+/// If the inner anchor is on a mapping key (different node), it's valid.
+/// If the inner anchor is on a scalar value (same node), it's a double anchor error.
+fn check_double_anchor_then_parse(
+  parser: Parser,
+  key_indent: Int,
+  anchor_name: String,
+  parse_value_fn: ParseValueFn,
+) -> Result(#(YamlValue, Parser), ParseError) {
+  let after_indent = advance(parser)
+  case current(after_indent) {
+    Some(lexer.Anchor(_)) ->
+      case is_anchor_on_mapping_key(after_indent) {
+        True ->
+          parse_and_register_anchor(
+            parser,
+            key_indent + 1,
+            anchor_name,
+            parse_value_fn,
+          )
+        False ->
+          Error(ParseError("A node can only have one anchor", after_indent.pos))
+      }
+    _ ->
+      parse_and_register_anchor(
+        parser,
+        key_indent + 1,
+        anchor_name,
+        parse_value_fn,
+      )
+  }
+}
+
+/// Check if an anchor is on a mapping key (scalar followed by colon = different node)
+/// vs on a plain scalar value (same node = double anchor).
+fn is_anchor_on_mapping_key(parser: Parser) -> Bool {
+  let after_anchor = advance(parser) |> skip_spaces
+  case current(after_anchor) {
+    Some(lexer.Plain(_))
+    | Some(lexer.SingleQuoted(_))
+    | Some(lexer.DoubleQuoted(_)) -> {
+      let after_scalar = advance(after_anchor) |> skip_spaces
+      case current(after_scalar) {
+        Some(lexer.Colon) -> True
+        _ -> False
+      }
+    }
+    // Non-scalar after anchor (flow collection, etc.) - not a simple double anchor
+    _ -> True
   }
 }
 
@@ -619,56 +611,33 @@ fn parse_block_mapping_pairs_col(
     Some(lexer.Question) if min_indent == 0 ->
       parse_explicit_key_in_mapping(parser, min_indent, 0, acc, parse_value_fn)
 
-    Some(lexer.Plain(s)) if min_indent == 0 -> {
-      let after_key = advance(parser) |> skip_spaces
-      case current(after_key) {
-        Some(lexer.Colon) ->
-          add_key_value_pair_col(
-            s,
-            advance(after_key) |> skip_spaces,
-            min_indent,
-            min_indent,
-            Some(0),
-            acc,
-            parse_value_fn,
-          )
-        _ -> done
-      }
-    }
-
-    Some(lexer.SingleQuoted(s)) if min_indent == 0 -> {
-      let after_key = advance(parser) |> skip_spaces
-      case current(after_key) {
-        Some(lexer.Colon) ->
-          add_key_value_pair_col(
-            s,
-            advance(after_key) |> skip_spaces,
-            min_indent,
-            min_indent,
-            Some(0),
-            acc,
-            parse_value_fn,
-          )
-        _ -> done
-      }
-    }
-
-    Some(lexer.DoubleQuoted(s)) if min_indent == 0 -> {
-      let after_key = advance(parser) |> skip_spaces
-      case current(after_key) {
-        Some(lexer.Colon) ->
-          add_key_value_pair_col(
-            s,
-            advance(after_key) |> skip_spaces,
-            min_indent,
-            min_indent,
-            Some(0),
-            acc,
-            parse_value_fn,
-          )
-        _ -> done
-      }
-    }
+    Some(lexer.Plain(s)) if min_indent == 0 ->
+      try_scalar_as_mapping_key(
+        s,
+        parser,
+        min_indent,
+        acc,
+        done,
+        parse_value_fn,
+      )
+    Some(lexer.SingleQuoted(s)) if min_indent == 0 ->
+      try_scalar_as_mapping_key(
+        s,
+        parser,
+        min_indent,
+        acc,
+        done,
+        parse_value_fn,
+      )
+    Some(lexer.DoubleQuoted(s)) if min_indent == 0 ->
+      try_scalar_as_mapping_key(
+        s,
+        parser,
+        min_indent,
+        acc,
+        done,
+        parse_value_fn,
+      )
 
     Some(lexer.Alias(name)) if min_indent == 0 ->
       parse_alias_key(
@@ -799,6 +768,32 @@ fn add_key_value_pair(
     acc,
     parse_value_fn,
   )
+}
+
+/// Try to use a scalar as a mapping key at indent 0.
+/// If followed by colon, parse as key-value pair; otherwise mapping is done.
+fn try_scalar_as_mapping_key(
+  key: String,
+  parser: Parser,
+  min_indent: Int,
+  acc: List(#(String, YamlValue)),
+  done: Result(#(YamlValue, Parser), ParseError),
+  parse_value_fn: ParseValueFn,
+) -> Result(#(YamlValue, Parser), ParseError) {
+  let after_key = advance(parser) |> skip_spaces
+  case current(after_key) {
+    Some(lexer.Colon) ->
+      add_key_value_pair_col(
+        key,
+        advance(after_key) |> skip_spaces,
+        min_indent,
+        min_indent,
+        Some(0),
+        acc,
+        parse_value_fn,
+      )
+    _ -> done
+  }
 }
 
 /// Parse an alias used as a mapping key.

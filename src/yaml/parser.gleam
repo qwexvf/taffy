@@ -370,100 +370,8 @@ pub fn parse_value(
     Some(lexer.DocStart) -> Ok(#(value.Null, parser))
 
     // Anchor
-    Some(lexer.Anchor(name)) -> {
-      let parser = advance(parser) |> skip_spaces
-      // Check if this anchor is on a mapping key (scalar followed by colon)
-      case current(parser) {
-        // Reject two anchors on the same node
-        Some(lexer.Anchor(_)) ->
-          Error(ParseError("A node can only have one anchor", parser.pos))
-        // Reject anchor on an alias (can't anchor an alias reference)
-        Some(lexer.Alias(_)) ->
-          Error(ParseError("Cannot place an anchor on an alias", parser.pos))
-        Some(lexer.Plain(s)) -> {
-          let after_plain = advance(parser) |> skip_spaces
-          case current(after_plain) {
-            Some(lexer.Colon) -> {
-              // Anchor is on the key, not the mapping
-              // Register the anchor with the key value, then parse the mapping
-              let parser =
-                Parser(
-                  ..after_plain,
-                  anchors: dict.insert(parser.anchors, name, value.String(s)),
-                )
-              block.parse_block_mapping_from_key(
-                s,
-                advance(parser),
-                min_indent,
-                parse_value,
-              )
-            }
-            _ -> {
-              // Not a mapping key, anchor is on the scalar value
-              let parser =
-                Parser(
-                  ..advance(parser),
-                  anchors: dict.insert(
-                    parser.anchors,
-                    name,
-                    scalar.parse_scalar(s),
-                  ),
-                )
-              Ok(#(scalar.parse_scalar(s), parser))
-            }
-          }
-        }
-        // Handle quoted strings as mapping keys with anchors
-        Some(lexer.SingleQuoted(s)) | Some(lexer.DoubleQuoted(s)) -> {
-          let after_quoted = advance(parser) |> skip_spaces
-          case current(after_quoted) {
-            Some(lexer.Colon) -> {
-              // Anchor is on the key
-              let parser =
-                Parser(
-                  ..after_quoted,
-                  anchors: dict.insert(parser.anchors, name, value.String(s)),
-                )
-              block.parse_block_mapping_from_key(
-                s,
-                advance(parser),
-                min_indent,
-                parse_value,
-              )
-            }
-            _ -> {
-              // Not a mapping key, anchor is on the string value
-              let parser =
-                Parser(
-                  ..advance(parser),
-                  anchors: dict.insert(parser.anchors, name, value.String(s)),
-                )
-              Ok(#(value.String(s), parser))
-            }
-          }
-        }
-        // Block sequence indicator right after anchor on same line is invalid
-        Some(lexer.Dash) ->
-          Error(ParseError(
-            "Block sequence not allowed on same line as anchor",
-            parser.pos,
-          ))
-        _ -> {
-          // Not a scalar, parse normally
-          case parse_value(parser, min_indent) {
-            Ok(#(val, parser)) -> {
-              let parser =
-                Parser(
-                  ..parser,
-                  anchors: dict.insert(parser.anchors, name, val),
-                )
-              Ok(#(val, parser))
-            }
-            Error(e) -> Error(e)
-          }
-        }
-      }
-    }
+    Some(lexer.Anchor(name)) ->
+      parse_anchored_value(advance(parser) |> skip_spaces, name, min_indent)
 
     // Alias - might be a value or a mapping key
     Some(lexer.Alias(name)) -> {
@@ -1209,6 +1117,82 @@ fn check_multiline_continuation(
     }
     // Insufficient indent or no indent - scalar ends
     _ -> #(acc, Parser(..parser, pos: parser.pos - 1))
+  }
+}
+
+/// Parse a value preceded by an anchor.
+/// Determines whether the anchor is on a mapping key, a scalar, or a complex value.
+fn parse_anchored_value(
+  parser: Parser,
+  name: String,
+  min_indent: Int,
+) -> Result(#(YamlValue, Parser), ParseError) {
+  case current(parser) {
+    Some(lexer.Anchor(_)) ->
+      Error(ParseError("A node can only have one anchor", parser.pos))
+    Some(lexer.Alias(_)) ->
+      Error(ParseError("Cannot place an anchor on an alias", parser.pos))
+    Some(lexer.Plain(s)) ->
+      parse_anchored_scalar_or_key(
+        parser,
+        name,
+        s,
+        min_indent,
+        scalar.parse_scalar,
+      )
+    Some(lexer.SingleQuoted(s)) | Some(lexer.DoubleQuoted(s)) ->
+      parse_anchored_scalar_or_key(parser, name, s, min_indent, fn(v) {
+        value.String(v)
+      })
+    Some(lexer.Dash) ->
+      Error(ParseError(
+        "Block sequence not allowed on same line as anchor",
+        parser.pos,
+      ))
+    _ -> {
+      use #(val, parser) <- result.try(parse_value(parser, min_indent))
+      let parser =
+        Parser(..parser, anchors: dict.insert(parser.anchors, name, val))
+      Ok(#(val, parser))
+    }
+  }
+}
+
+/// Parse a scalar that might be an anchored mapping key (followed by colon)
+/// or just an anchored scalar value.
+fn parse_anchored_scalar_or_key(
+  parser: Parser,
+  anchor_name: String,
+  s: String,
+  min_indent: Int,
+  to_value: fn(String) -> YamlValue,
+) -> Result(#(YamlValue, Parser), ParseError) {
+  let after_scalar = advance(parser) |> skip_spaces
+  case current(after_scalar) {
+    Some(lexer.Colon) -> {
+      // Anchor is on the key, parse as mapping
+      let parser =
+        Parser(
+          ..after_scalar,
+          anchors: dict.insert(parser.anchors, anchor_name, value.String(s)),
+        )
+      block.parse_block_mapping_from_key(
+        s,
+        advance(parser),
+        min_indent,
+        parse_value,
+      )
+    }
+    _ -> {
+      // Not a mapping key, anchor is on the scalar value
+      let val = to_value(s)
+      let parser =
+        Parser(
+          ..advance(parser),
+          anchors: dict.insert(parser.anchors, anchor_name, val),
+        )
+      Ok(#(val, parser))
+    }
   }
 }
 

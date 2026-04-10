@@ -353,56 +353,57 @@ fn count_indent_loop(lexer: Lexer, count: Int) -> Result(#(Int, Lexer), String) 
     Some(" ") -> count_indent_loop(advance(lexer), count + 1)
     Some("\t") ->
       case count {
-        // Tab as first character of indentation
-        0 -> {
-          // Skip all tabs (and spaces after tabs)
-          let after_tabs = skip_tabs_lexer(advance(lexer))
-          case peek(after_tabs) {
-            // EOF or newline after tab = just whitespace
-            None | Some("\n") | Some("\r") -> Ok(#(0, Lexer(..lexer, col: 0)))
-            // Block indicator after tab = tab used as indentation = error
-            Some("-") -> {
-              case peek_n(after_tabs, 3) {
-                "---" -> {
-                  // Could be doc start - treat tab as whitespace
-                  Ok(#(0, Lexer(..after_tabs, col: 0)))
-                }
-                _ -> {
-                  // Check if dash is an indicator (followed by whitespace/end)
-                  let after_dash = advance(after_tabs)
-                  case peek(after_dash) {
-                    Some(" ") | Some("\n") | Some("\r") | Some("\t") | None ->
-                      Error("Tabs are not allowed as indentation in YAML")
-                    _ ->
-                      // Not an indicator, just content (e.g., negative number)
-                      Ok(#(0, Lexer(..after_tabs, col: 0)))
-                  }
-                }
-              }
-            }
-            Some("?") -> {
-              let after_q = advance(after_tabs)
-              case peek(after_q) {
-                Some(" ") | Some("\n") | Some("\r") | Some("\t") | None ->
-                  Error("Tabs are not allowed as indentation in YAML")
-                _ -> Ok(#(0, Lexer(..after_tabs, col: 0)))
-              }
-            }
-            // Content after tab that looks like a mapping key = error
-            _ -> {
-              case has_mapping_indicator_after_tab(after_tabs) {
-                True -> Error("Tabs are not allowed as indentation in YAML")
-                False ->
-                  // Flow collections, plain scalars etc. at indent 0
-                  Ok(#(0, Lexer(..after_tabs, col: 0)))
-              }
-            }
-          }
-        }
+        0 -> check_tab_at_line_start(lexer)
         // Tab after spaces - stop counting, tab is content/inline whitespace
         _ -> Ok(#(count, Lexer(..lexer, col: count)))
       }
     _ -> Ok(#(count, Lexer(..lexer, col: count)))
+  }
+}
+
+/// Handle a tab character at the start of a line (no preceding spaces).
+/// Tabs are not allowed as indentation in YAML for block indicators and mapping keys.
+fn check_tab_at_line_start(lexer: Lexer) -> Result(#(Int, Lexer), String) {
+  let after_tabs = skip_tabs_lexer(advance(lexer))
+  case peek(after_tabs) {
+    None | Some("\n") | Some("\r") -> Ok(#(0, Lexer(..lexer, col: 0)))
+    Some("-") -> check_tab_before_dash(after_tabs, lexer)
+    Some("?") -> check_tab_before_indicator(after_tabs)
+    _ ->
+      case has_mapping_indicator_after_tab(after_tabs) {
+        True -> Error("Tabs are not allowed as indentation in YAML")
+        False -> Ok(#(0, Lexer(..after_tabs, col: 0)))
+      }
+  }
+}
+
+/// Check if a dash after tab is a block indicator (error) or content like negative number (ok).
+fn check_tab_before_dash(
+  after_tabs: Lexer,
+  _original: Lexer,
+) -> Result(#(Int, Lexer), String) {
+  case peek_n(after_tabs, 3) {
+    "---" -> Ok(#(0, Lexer(..after_tabs, col: 0)))
+    _ -> {
+      let after_dash = advance(after_tabs)
+      case peek(after_dash) {
+        Some(" ") | Some("\n") | Some("\r") | Some("\t") | None ->
+          Error("Tabs are not allowed as indentation in YAML")
+        _ -> Ok(#(0, Lexer(..after_tabs, col: 0)))
+      }
+    }
+  }
+}
+
+/// Check if a block indicator (? etc.) after tab is an error.
+fn check_tab_before_indicator(
+  after_tabs: Lexer,
+) -> Result(#(Int, Lexer), String) {
+  let after_indicator = advance(after_tabs)
+  case peek(after_indicator) {
+    Some(" ") | Some("\n") | Some("\r") | Some("\t") | None ->
+      Error("Tabs are not allowed as indentation in YAML")
+    _ -> Ok(#(0, Lexer(..after_tabs, col: 0)))
   }
 }
 
