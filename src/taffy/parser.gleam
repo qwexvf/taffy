@@ -162,38 +162,33 @@ fn extract_tag_handle(directive_content: String) -> String {
 /// Validate that a tag's handle (e.g., !prefix! in !prefix!A) is defined.
 /// Default handles ! and !! are always valid. Custom handles need %TAG directives.
 fn validate_tag_handle(tag: String, parser: Parser) -> Result(Nil, ParseError) {
-  // Verbatim tags (!<...>) are always valid
-  case string.starts_with(tag, "!<") {
+  // Verbatim tags, non-specific tag !, and secondary handle !! are always valid
+  case is_always_valid_tag(tag) {
     True -> Ok(Nil)
-    False -> {
-      // Non-specific tag ! is always valid
-      case tag == "!" {
+    False -> validate_custom_tag_handle(tag, parser)
+  }
+}
+
+/// Check if a tag is one of the always-valid forms.
+fn is_always_valid_tag(tag: String) -> Bool {
+  string.starts_with(tag, "!<")
+  || tag == "!"
+  || string.starts_with(tag, "!!")
+}
+
+/// Validate a custom tag handle (e.g., !prefix!suffix) is defined via %TAG.
+fn validate_custom_tag_handle(
+  tag: String,
+  parser: Parser,
+) -> Result(Nil, ParseError) {
+  case extract_custom_handle(tag) {
+    option.None -> Ok(Nil)
+    option.Some(handle) ->
+      case list.contains(parser.tag_handles, handle) {
         True -> Ok(Nil)
-        False -> {
-          // !! (secondary handle) is always valid
-          case string.starts_with(tag, "!!") {
-            True -> Ok(Nil)
-            False -> {
-              // Check for custom handle pattern: !handle!suffix
-              // A custom handle starts with ! and contains another !
-              case extract_custom_handle(tag) {
-                option.None -> Ok(Nil)
-                option.Some(handle) -> {
-                  case list.contains(parser.tag_handles, handle) {
-                    True -> Ok(Nil)
-                    False ->
-                      Error(ParseError(
-                        "Undefined tag handle: " <> handle,
-                        parser.pos,
-                      ))
-                  }
-                }
-              }
-            }
-          }
-        }
+        False ->
+          Error(ParseError("Undefined tag handle: " <> handle, parser.pos))
       }
-    }
   }
 }
 

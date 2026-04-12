@@ -634,14 +634,10 @@ pub fn parse_flow_value(
     Some(lexer.DoubleQuoted(s)) -> Ok(#(value.String(s), advance(parser)))
     Some(lexer.Anchor(name)) -> {
       let parser = advance(parser) |> skip_whitespace
-      case parse_flow_value(parser) {
-        Ok(#(val, parser)) -> {
-          let parser =
-            Parser(..parser, anchors: dict.insert(parser.anchors, name, val))
-          Ok(#(val, parser))
-        }
-        Error(e) -> Error(e)
-      }
+      use #(val, parser) <- result.try(parse_flow_value(parser))
+      let parser =
+        Parser(..parser, anchors: dict.insert(parser.anchors, name, val))
+      Ok(#(val, parser))
     }
     Some(lexer.Alias(name)) -> {
       let parser = advance(parser)

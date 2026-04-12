@@ -105,11 +105,8 @@ pub fn tokenize(input: String) -> Result(List(Token), String) {
   let lexer = new(input)
   case count_indent(lexer) {
     Error(e) -> Error(e)
-    Ok(#(indent, lexer)) ->
-      case indent {
-        0 -> tokenize_all(lexer, [])
-        n -> tokenize_all(lexer, [Indent(n)])
-      }
+    Ok(#(0, lexer)) -> tokenize_all(lexer, [])
+    Ok(#(n, lexer)) -> tokenize_all(lexer, [Indent(n)])
   }
 }
 
@@ -129,215 +126,211 @@ fn tokenize_all(lexer: Lexer, acc: List(Token)) -> Result(List(Token), String) {
 pub fn next_token(lexer: Lexer) -> Result(#(Token, Lexer), String) {
   case peek(lexer) {
     None -> Ok(#(Eof, lexer))
-    Some(c) -> {
-      case c {
-        // Newline
-        "\n" -> {
-          let lexer = advance(lexer)
-          case count_indent(lexer) {
-            Error(e) -> Error(e)
-            Ok(#(indent, lexer)) ->
-              case indent {
-                0 -> Ok(#(Newline, lexer))
-                n -> Ok(#(Indent(n), lexer))
-              }
-          }
-        }
-        "\r" -> {
-          let lexer = advance(lexer)
-          // Handle \r\n
-          let lexer = case peek(lexer) {
-            Some("\n") -> advance(lexer)
-            _ -> lexer
-          }
-          case count_indent(lexer) {
-            Error(e) -> Error(e)
-            Ok(#(indent, lexer)) ->
-              case indent {
-                0 -> Ok(#(Newline, lexer))
-                n -> Ok(#(Indent(n), lexer))
-              }
-          }
-        }
-        // Skip spaces (not at line start)
-        " " -> next_token(advance(lexer))
-        "\t" -> next_token(advance(lexer))
-        // Comment - must be preceded by whitespace or at start of line
-        "#" -> {
-          let valid = case lexer.pos > 0 {
-            False -> True
-            True -> {
-              let before = string.slice(lexer.input, lexer.pos - 1, 1)
-              case before {
-                " " | "\t" | "\n" | "\r" -> True
-                _ -> False
-              }
-            }
-          }
-          case valid {
-            True -> {
-              let #(text, lexer) = read_until_newline(advance(lexer))
-              Ok(#(Comment(text), lexer))
-            }
-            False ->
-              Error("Invalid comment: '#' must be preceded by whitespace")
-          }
-        }
-        // Colon (check for mapping)
-        ":" -> {
-          let lexer = advance(lexer)
-          case peek(lexer) {
-            // Always a mapping indicator if followed by whitespace or end
-            Some(" ") | Some("\n") | Some("\r") | Some("\t") | None ->
-              Ok(#(Colon, lexer))
-            // In flow context, colon before flow indicators is also a separator
-            Some(",") | Some("]") | Some("}") -> Ok(#(Colon, lexer))
-            // After a quoted string, colon is typically a separator even if adjacent
-            Some("\"") | Some("'") | Some("[") | Some("{") ->
-              Ok(#(Colon, lexer))
-            _ -> {
-              // Part of a plain scalar
-              read_plain_scalar(back_up(lexer))
-            }
-          }
-        }
-        // Question mark (explicit key indicator)
-        "?" -> {
-          let lexer = advance(lexer)
-          case peek(lexer) {
-            Some(" ") | Some("\n") | Some("\r") | Some("\t") | None ->
-              Ok(#(Question, lexer))
-            _ -> {
-              // Part of a plain scalar
-              read_plain_scalar(back_up(lexer))
-            }
-          }
-        }
-        // Dash (check for sequence or document start)
-        "-" -> {
-          case peek_n(lexer, 3) {
-            "---" -> {
-              // Only treat as document start if followed by whitespace or end
-              let after_dashes = advance_n(lexer, 3)
-              case peek(after_dashes) {
-                Some(" ") | Some("\n") | Some("\r") | Some("\t") | None ->
-                  // Set in_document to True when entering a document
-                  Ok(#(DocStart, Lexer(..after_dashes, in_document: True)))
-                _ ->
-                  // Part of a plain scalar (like ---word)
-                  read_plain_scalar(lexer)
-              }
-            }
-            _ -> {
-              let lexer = advance(lexer)
-              case peek(lexer) {
-                Some(" ") | Some("\n") | Some("\r") | Some("\t") | None ->
-                  Ok(#(Dash, lexer))
-                // In flow context, dash followed by flow indicator is invalid
-                Some(",") | Some("]") | Some("}") | Some("[") | Some("{")
-                  if lexer.flow_level > 0
-                -> Error("Invalid use of dash indicator in flow context")
-                _ -> {
-                  // Part of a plain scalar (like negative number)
-                  read_plain_scalar(back_up(lexer))
-                }
-              }
-            }
-          }
-        }
-        // Document end
-        "." -> {
-          case peek_n(lexer, 3) {
-            "..." -> {
-              // Only treat as document end if followed by whitespace or end
-              let after_dots = advance_n(lexer, 3)
-              case peek(after_dots) {
-                Some(" ") | Some("\n") | Some("\r") | Some("\t") | None ->
-                  // Set in_document to False when leaving a document
-                  Ok(#(DocEnd, Lexer(..after_dots, in_document: False)))
-                _ ->
-                  // Part of a plain scalar (like ...word)
-                  read_plain_scalar(lexer)
-              }
-            }
-            _ -> read_plain_scalar(lexer)
-          }
-        }
-        // Flow indicators
-        "[" -> {
-          let lexer = advance(lexer)
-          Ok(#(BracketOpen, Lexer(..lexer, flow_level: lexer.flow_level + 1)))
-        }
-        "]" -> {
-          let lexer = advance(lexer)
-          Ok(#(
-            BracketClose,
-            Lexer(..lexer, flow_level: int.max(0, lexer.flow_level - 1)),
-          ))
-        }
-        "{" -> {
-          let lexer = advance(lexer)
-          Ok(#(BraceOpen, Lexer(..lexer, flow_level: lexer.flow_level + 1)))
-        }
-        "}" -> {
-          let lexer = advance(lexer)
-          Ok(#(
-            BraceClose,
-            Lexer(..lexer, flow_level: int.max(0, lexer.flow_level - 1)),
-          ))
-        }
-        "," -> Ok(#(Comma, advance(lexer)))
-        // Anchor
-        "&" -> {
-          let #(name, lexer) = read_identifier(advance(lexer))
-          Ok(#(Anchor(name), lexer))
-        }
-        // Alias
-        "*" -> {
-          let #(name, lexer) = read_identifier(advance(lexer))
-          Ok(#(Alias(name), lexer))
-        }
-        // Tag
-        "!" -> {
-          let #(tag, lexer) = read_tag(advance(lexer))
-          Ok(#(Tag(tag), lexer))
-        }
-        // Block scalars
-        "|" -> read_literal_block(advance(lexer))
-        ">" -> read_folded_block(advance(lexer))
-        // Quoted strings
-        "'" -> read_single_quoted(advance(lexer))
-        "\"" -> read_double_quoted(advance(lexer))
-        // Directive (only at start of line, followed by letter, and NOT inside a document)
-        // Directives are %YAML, %TAG, or %RESERVED-NAME
-        // Inside a document (after ---), % is just content
-        "%" -> {
-          case lexer.col, lexer.in_document {
-            // At start of line and NOT inside a document - might be directive
-            0, False -> {
-              // Check if followed by a letter (directive name)
-              case peek(advance(lexer)) {
-                Some(next) -> {
-                  case is_letter(next) {
-                    True -> {
-                      // Emit directive token instead of skipping
-                      let #(text, lexer) = read_until_newline(advance(lexer))
-                      Ok(#(Directive(text), lexer))
-                    }
-                    False -> read_plain_scalar(lexer)
-                  }
-                }
-                None -> read_plain_scalar(lexer)
-              }
-            }
-            // Inside document or not at start of line - treat as plain scalar
-            _, _ -> read_plain_scalar(lexer)
-          }
-        }
-        // Plain scalar
+    // Newline
+    Some("\n") -> lex_after_newline(advance(lexer))
+    Some("\r") -> {
+      let lexer = advance(lexer)
+      // Handle \r\n
+      let lexer = case peek(lexer) {
+        Some("\n") -> advance(lexer)
+        _ -> lexer
+      }
+      lex_after_newline(lexer)
+    }
+    // Skip spaces (not at line start)
+    Some(" ") | Some("\t") -> next_token(advance(lexer))
+    // Comment - must be preceded by whitespace or at start of line
+    Some("#") -> lex_comment(lexer)
+    // Colon (check for mapping)
+    Some(":") -> lex_colon(advance(lexer))
+    // Question mark (explicit key indicator)
+    Some("?") -> lex_question(advance(lexer))
+    // Dash (check for sequence or document start)
+    Some("-") -> lex_dash(lexer)
+    // Document end
+    Some(".") -> lex_dot(lexer)
+    // Flow indicators
+    Some("[") -> {
+      let lexer = advance(lexer)
+      Ok(#(BracketOpen, Lexer(..lexer, flow_level: lexer.flow_level + 1)))
+    }
+    Some("]") -> {
+      let lexer = advance(lexer)
+      Ok(#(
+        BracketClose,
+        Lexer(..lexer, flow_level: int.max(0, lexer.flow_level - 1)),
+      ))
+    }
+    Some("{") -> {
+      let lexer = advance(lexer)
+      Ok(#(BraceOpen, Lexer(..lexer, flow_level: lexer.flow_level + 1)))
+    }
+    Some("}") -> {
+      let lexer = advance(lexer)
+      Ok(#(
+        BraceClose,
+        Lexer(..lexer, flow_level: int.max(0, lexer.flow_level - 1)),
+      ))
+    }
+    Some(",") -> Ok(#(Comma, advance(lexer)))
+    // Anchor
+    Some("&") -> {
+      let #(name, lexer) = read_identifier(advance(lexer))
+      Ok(#(Anchor(name), lexer))
+    }
+    // Alias
+    Some("*") -> {
+      let #(name, lexer) = read_identifier(advance(lexer))
+      Ok(#(Alias(name), lexer))
+    }
+    // Tag
+    Some("!") -> {
+      let #(tag, lexer) = read_tag(advance(lexer))
+      Ok(#(Tag(tag), lexer))
+    }
+    // Block scalars
+    Some("|") -> read_literal_block(advance(lexer))
+    Some(">") -> read_folded_block(advance(lexer))
+    // Quoted strings
+    Some("'") -> read_single_quoted(advance(lexer))
+    Some("\"") -> read_double_quoted(advance(lexer))
+    // Directive (only at start of line, followed by letter, and NOT inside a document)
+    Some("%") -> lex_percent(lexer)
+    // Plain scalar
+    Some(_) -> read_plain_scalar(lexer)
+  }
+}
+
+/// After consuming a newline, count indent and produce Newline or Indent token.
+fn lex_after_newline(lexer: Lexer) -> Result(#(Token, Lexer), String) {
+  case count_indent(lexer) {
+    Error(e) -> Error(e)
+    Ok(#(0, lexer)) -> Ok(#(Newline, lexer))
+    Ok(#(n, lexer)) -> Ok(#(Indent(n), lexer))
+  }
+}
+
+/// Lex a comment token (# must be preceded by whitespace or at start of line).
+fn lex_comment(lexer: Lexer) -> Result(#(Token, Lexer), String) {
+  let valid = case lexer.pos > 0 {
+    False -> True
+    True -> {
+      let before = string.slice(lexer.input, lexer.pos - 1, 1)
+      case before {
+        " " | "\t" | "\n" | "\r" -> True
+        _ -> False
+      }
+    }
+  }
+  case valid {
+    True -> {
+      let #(text, lexer) = read_until_newline(advance(lexer))
+      Ok(#(Comment(text), lexer))
+    }
+    False -> Error("Invalid comment: '#' must be preceded by whitespace")
+  }
+}
+
+/// Lex a colon token (already advanced past the colon character).
+fn lex_colon(lexer: Lexer) -> Result(#(Token, Lexer), String) {
+  case peek(lexer) {
+    // Always a mapping indicator if followed by whitespace or end
+    Some(" ") | Some("\n") | Some("\r") | Some("\t") | None ->
+      Ok(#(Colon, lexer))
+    // In flow context, colon before flow indicators is also a separator
+    Some(",") | Some("]") | Some("}") -> Ok(#(Colon, lexer))
+    // After a quoted string, colon is typically a separator even if adjacent
+    Some("\"") | Some("'") | Some("[") | Some("{") -> Ok(#(Colon, lexer))
+    _ ->
+      // Part of a plain scalar
+      read_plain_scalar(back_up(lexer))
+  }
+}
+
+/// Lex a question mark token (already advanced past the ? character).
+fn lex_question(lexer: Lexer) -> Result(#(Token, Lexer), String) {
+  case peek(lexer) {
+    Some(" ") | Some("\n") | Some("\r") | Some("\t") | None ->
+      Ok(#(Question, lexer))
+    _ ->
+      // Part of a plain scalar
+      read_plain_scalar(back_up(lexer))
+  }
+}
+
+/// Lex a dash, which may be a sequence entry, document start, or plain scalar.
+fn lex_dash(lexer: Lexer) -> Result(#(Token, Lexer), String) {
+  case peek_n(lexer, 3) {
+    "---" -> lex_doc_start(lexer)
+    _ -> lex_dash_indicator(advance(lexer))
+  }
+}
+
+/// Try to lex --- as a document start marker.
+fn lex_doc_start(lexer: Lexer) -> Result(#(Token, Lexer), String) {
+  let after_dashes = advance_n(lexer, 3)
+  case peek(after_dashes) {
+    Some(" ") | Some("\n") | Some("\r") | Some("\t") | None ->
+      Ok(#(DocStart, Lexer(..after_dashes, in_document: True)))
+    _ ->
+      // Part of a plain scalar (like ---word)
+      read_plain_scalar(lexer)
+  }
+}
+
+/// Lex a dash that is not part of --- (already advanced past the dash).
+fn lex_dash_indicator(lexer: Lexer) -> Result(#(Token, Lexer), String) {
+  case peek(lexer) {
+    Some(" ") | Some("\n") | Some("\r") | Some("\t") | None ->
+      Ok(#(Dash, lexer))
+    // In flow context, dash followed by flow indicator is invalid
+    Some(",") | Some("]") | Some("}") | Some("[") | Some("{")
+      if lexer.flow_level > 0
+    -> Error("Invalid use of dash indicator in flow context")
+    _ ->
+      // Part of a plain scalar (like negative number)
+      read_plain_scalar(back_up(lexer))
+  }
+}
+
+/// Lex a dot, which may be a document end marker or plain scalar.
+fn lex_dot(lexer: Lexer) -> Result(#(Token, Lexer), String) {
+  case peek_n(lexer, 3) {
+    "..." -> {
+      let after_dots = advance_n(lexer, 3)
+      case peek(after_dots) {
+        Some(" ") | Some("\n") | Some("\r") | Some("\t") | None ->
+          Ok(#(DocEnd, Lexer(..after_dots, in_document: False)))
         _ -> read_plain_scalar(lexer)
       }
     }
+    _ -> read_plain_scalar(lexer)
+  }
+}
+
+/// Lex a percent sign, which may be a directive or plain scalar.
+fn lex_percent(lexer: Lexer) -> Result(#(Token, Lexer), String) {
+  case lexer.col, lexer.in_document {
+    // At start of line and NOT inside a document - might be directive
+    0, False -> lex_possible_directive(lexer)
+    // Inside document or not at start of line - treat as plain scalar
+    _, _ -> read_plain_scalar(lexer)
+  }
+}
+
+/// Check if % at column 0 outside a document is followed by a letter (directive).
+fn lex_possible_directive(lexer: Lexer) -> Result(#(Token, Lexer), String) {
+  case peek(advance(lexer)) {
+    Some(next) -> {
+      case is_letter(next) {
+        True -> {
+          let #(text, lexer) = read_until_newline(advance(lexer))
+          Ok(#(Directive(text), lexer))
+        }
+        False -> read_plain_scalar(lexer)
+      }
+    }
+    None -> read_plain_scalar(lexer)
   }
 }
 
@@ -504,14 +497,10 @@ fn read_identifier_loop(
   // - flow indicators: , [ ] { }
   // NOTE: Colons ARE allowed in anchor names per YAML 1.2 spec
   case peek(lexer) {
-    Some(c) -> {
-      case c {
-        " " | "\t" | "\n" | "\r" | "," | "[" | "]" | "{" | "}" ->
-          #(list_to_string(acc), lexer)
-        _ -> read_identifier_loop(advance(lexer), [c, ..acc])
-      }
-    }
-    _ -> #(list_to_string(acc), lexer)
+    Some(" ") | Some("\t") | Some("\n") | Some("\r") | Some(",") | Some("[")
+    | Some("]") | Some("{") | Some("}") | None ->
+      #(list_to_string(acc), lexer)
+    Some(c) -> read_identifier_loop(advance(lexer), [c, ..acc])
   }
 }
 
@@ -541,14 +530,10 @@ fn read_tag_loop(
   acc: List(String),
 ) -> #(String, Lexer) {
   case peek(lexer) {
-    Some(c) -> {
-      case c {
-        " " | "\t" | "\n" | "\r" | "," | "[" | "]" | "{" | "}" ->
-          #(list_to_string(acc), lexer)
-        _ -> read_tag_loop(advance(lexer), [c, ..acc])
-      }
-    }
-    _ -> #(list_to_string(acc), lexer)
+    Some(" ") | Some("\t") | Some("\n") | Some("\r") | Some(",") | Some("[")
+    | Some("]") | Some("{") | Some("}") | None ->
+      #(list_to_string(acc), lexer)
+    Some(c) -> read_tag_loop(advance(lexer), [c, ..acc])
   }
 }
 
@@ -640,25 +625,35 @@ fn check_multiline_implicit_key(
   // In flow context, multiline quoted keys are allowed
   case lexer.flow_level > 0 {
     True -> Ok(#(token, lexer))
-    False -> {
-      // Skip spaces (not newlines) to check for colon
-      let check_lexer = skip_inline_spaces(lexer)
-      case peek(check_lexer) {
-        Some(":") -> {
-          // Check if followed by whitespace or end (mapping indicator)
-          let after_colon = advance(check_lexer)
-          case peek(after_colon) {
-            Some(" ") | Some("\n") | Some("\r") | Some("\t") | None ->
-              Error("Multiline quoted string cannot be used as an implicit key")
-            // In flow context, colon before flow indicators is also a separator
-            Some(",") | Some("]") | Some("}") ->
-              Error("Multiline quoted string cannot be used as an implicit key")
-            _ -> Ok(#(token, lexer))
-          }
-        }
-        _ -> Ok(#(token, lexer))
-      }
-    }
+    False -> check_multiline_block_key(lexer, token)
+  }
+}
+
+/// In block context, check if a multiline quoted string precedes a mapping colon.
+fn check_multiline_block_key(
+  lexer: Lexer,
+  token: Token,
+) -> Result(#(Token, Lexer), String) {
+  let check_lexer = skip_inline_spaces(lexer)
+  case peek(check_lexer) {
+    Some(":") -> check_colon_is_mapping_indicator(lexer, token, check_lexer)
+    _ -> Ok(#(token, lexer))
+  }
+}
+
+/// After seeing ":" following a multiline quoted string, check if it's a mapping indicator.
+fn check_colon_is_mapping_indicator(
+  lexer: Lexer,
+  token: Token,
+  check_lexer: Lexer,
+) -> Result(#(Token, Lexer), String) {
+  let after_colon = advance(check_lexer)
+  case peek(after_colon) {
+    Some(" ") | Some("\n") | Some("\r") | Some("\t") | None ->
+      Error("Multiline quoted string cannot be used as an implicit key")
+    Some(",") | Some("]") | Some("}") ->
+      Error("Multiline quoted string cannot be used as an implicit key")
+    _ -> Ok(#(token, lexer))
   }
 }
 
@@ -1062,23 +1057,31 @@ fn read_hex_escape(
 ) -> Result(#(Token, Lexer), String) {
   case read_hex_digits(lexer, [], digits) {
     Error(e) -> Error(e)
-    Ok(#(hex_str, lexer)) -> {
-      case parse_hex(hex_str) {
-        Ok(codepoint) -> {
-          case string.utf_codepoint(codepoint) {
-            Ok(cp) ->
-              read_double_quoted_loop(
-                lexer,
-                [string.from_utf_codepoints([cp]), ..acc],
-                "",
-                multiline,
-              )
-            Error(_) -> Error("Invalid unicode codepoint: " <> hex_str)
-          }
-        }
-        Error(_) -> Error("Invalid hex escape: " <> hex_str)
+    Ok(#(hex_str, lexer)) ->
+      decode_hex_codepoint(lexer, acc, hex_str, multiline)
+  }
+}
+
+/// Decode a hex string into a unicode codepoint and continue parsing.
+fn decode_hex_codepoint(
+  lexer: Lexer,
+  acc: List(String),
+  hex_str: String,
+  multiline: Bool,
+) -> Result(#(Token, Lexer), String) {
+  case parse_hex(hex_str) {
+    Error(_) -> Error("Invalid hex escape: " <> hex_str)
+    Ok(codepoint) ->
+      case string.utf_codepoint(codepoint) {
+        Error(_) -> Error("Invalid unicode codepoint: " <> hex_str)
+        Ok(cp) ->
+          read_double_quoted_loop(
+            lexer,
+            [string.from_utf_codepoints([cp]), ..acc],
+            "",
+            multiline,
+          )
       }
-    }
   }
 }
 
@@ -1087,19 +1090,14 @@ fn read_hex_digits(
   acc: List(String),
   remaining: Int,
 ) -> Result(#(String, Lexer), String) {
-  case remaining {
-    0 -> Ok(#(list_to_string(acc), lexer))
-    _ -> {
-      case peek(lexer) {
-        None -> Error("Unterminated hex escape")
-        Some(c) -> {
-          case is_hex_char(c) {
-            True -> read_hex_digits(advance(lexer), [c, ..acc], remaining - 1)
-            False -> Error("Invalid hex character: " <> c)
-          }
-        }
+  case remaining, peek(lexer) {
+    0, _ -> Ok(#(list_to_string(acc), lexer))
+    _, None -> Error("Unterminated hex escape")
+    _, Some(c) ->
+      case is_hex_char(c) {
+        True -> read_hex_digits(advance(lexer), [c, ..acc], remaining - 1)
+        False -> Error("Invalid hex character: " <> c)
       }
-    }
   }
 }
 
@@ -1215,26 +1213,11 @@ fn read_literal_block_content(
   // Skip to end of header line
   let lexer = skip_to_eol(lexer)
 
-  // Skip the newline
-  case peek(lexer) {
-    Some("\n") -> {
-      let lexer = advance(lexer)
+  // Skip the newline and read content
+  case skip_newline(lexer) {
+    Ok(lexer) ->
       read_literal_content(lexer, header.chomping, header.explicit_indent)
-    }
-    Some("\r") -> {
-      let lexer = advance(lexer)
-      case peek(lexer) {
-        Some("\n") ->
-          read_literal_content(
-            advance(lexer),
-            header.chomping,
-            header.explicit_indent,
-          )
-        _ ->
-          read_literal_content(lexer, header.chomping, header.explicit_indent)
-      }
-    }
-    _ -> Ok(#(Literal(""), lexer))
+    Error(Nil) -> Ok(#(Literal(""), lexer))
   }
 }
 
@@ -1244,33 +1227,11 @@ fn read_folded_block(lexer: Lexer) -> Result(#(Token, Lexer), String) {
   case read_block_header(lexer) {
     Error(e) -> Error(e)
     Ok(#(header, lexer)) -> {
-      // Skip to end of header line
       let lexer = skip_to_eol(lexer)
-
-      // Skip the newline
-      case peek(lexer) {
-        Some("\n") -> {
-          let lexer = advance(lexer)
+      case skip_newline(lexer) {
+        Ok(lexer) ->
           read_folded_content(lexer, header.chomping, header.explicit_indent)
-        }
-        Some("\r") -> {
-          let lexer = advance(lexer)
-          case peek(lexer) {
-            Some("\n") ->
-              read_folded_content(
-                advance(lexer),
-                header.chomping,
-                header.explicit_indent,
-              )
-            _ ->
-              read_folded_content(
-                lexer,
-                header.chomping,
-                header.explicit_indent,
-              )
-          }
-        }
-        _ -> Ok(#(Folded(""), lexer))
+        Error(Nil) -> Ok(#(Folded(""), lexer))
       }
     }
   }
@@ -1381,6 +1342,21 @@ fn read_block_header_loop(
     }
     Some("\n") | Some("\r") | None -> Ok(#(header, lexer))
     Some(c) -> Error("Invalid character in block scalar header: " <> c)
+  }
+}
+
+/// Skip a newline character (\n, \r, or \r\n). Returns Error(Nil) if not at a newline.
+fn skip_newline(lexer: Lexer) -> Result(Lexer, Nil) {
+  case peek(lexer) {
+    Some("\n") -> Ok(advance(lexer))
+    Some("\r") -> {
+      let lexer = advance(lexer)
+      case peek(lexer) {
+        Some("\n") -> Ok(advance(lexer))
+        _ -> Ok(lexer)
+      }
+    }
+    _ -> Error(Nil)
   }
 }
 
