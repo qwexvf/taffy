@@ -296,7 +296,8 @@ fn parse_flow_mapping_pairs(
   use parser <- result.try(skip_flow_whitespace(parser))
 
   case current(parser) {
-    Some(lexer.BraceClose) -> Ok(#(value.Mapping(list.reverse(acc)), advance(parser)))
+    Some(lexer.BraceClose) ->
+      Ok(#(value.Mapping(list.reverse(acc)), advance(parser)))
 
     Some(lexer.Eof) | option.None ->
       Error(ParseError("Unterminated flow mapping", parser.pos))
@@ -324,10 +325,7 @@ fn parse_explicit_flow_mapping_pair(
       ))
 
     Some(lexer.Comma) ->
-      parse_flow_mapping_pairs(
-        advance(parser),
-        [#("", value.Null), ..acc],
-      )
+      parse_flow_mapping_pairs(advance(parser), [#("", value.Null), ..acc])
 
     Some(lexer.Colon) ->
       parse_flow_mapping_colon_value("", skip_whitespace(advance(parser)), acc)
@@ -343,10 +341,7 @@ fn parse_explicit_flow_mapping_pair(
             acc,
           )
         Some(lexer.Comma) ->
-          parse_flow_mapping_pairs(
-            advance(parser),
-            [#(key, value.Null), ..acc],
-          )
+          parse_flow_mapping_pairs(advance(parser), [#(key, value.Null), ..acc])
         Some(lexer.BraceClose) ->
           Ok(#(
             value.Mapping(list.reverse([#(key, value.Null), ..acc])),
@@ -366,10 +361,7 @@ fn parse_flow_mapping_colon_value(
 ) -> Result(#(YamlValue, Parser), ParseError) {
   case current(parser) {
     Some(lexer.Comma) ->
-      parse_flow_mapping_pairs(
-        advance(parser),
-        [#(key, value.Null), ..acc],
-      )
+      parse_flow_mapping_pairs(advance(parser), [#(key, value.Null), ..acc])
     Some(lexer.BraceClose) ->
       Ok(#(
         value.Mapping(list.reverse([#(key, value.Null), ..acc])),
@@ -393,7 +385,8 @@ fn continue_flow_mapping(
   use parser <- result.try(skip_flow_whitespace(parser))
   case current(parser) {
     Some(lexer.Comma) -> parse_flow_mapping_pairs(advance(parser), acc)
-    Some(lexer.BraceClose) -> Ok(#(value.Mapping(list.reverse(acc)), advance(parser)))
+    Some(lexer.BraceClose) ->
+      Ok(#(value.Mapping(list.reverse(acc)), advance(parser)))
     _ -> Error(ParseError("Expected ',' or '}'", parser.pos))
   }
 }
@@ -419,10 +412,7 @@ fn parse_flow_mapping_value(
       parse_flow_mapping_colon_value(key, skip_whitespace(advance(parser)), acc)
 
     Some(lexer.Comma) ->
-      parse_flow_mapping_pairs(
-        advance(parser),
-        [#(key, value.Null), ..acc],
-      )
+      parse_flow_mapping_pairs(advance(parser), [#(key, value.Null), ..acc])
 
     Some(lexer.BraceClose) -> {
       let acc = [#(key, value.Null), ..acc]

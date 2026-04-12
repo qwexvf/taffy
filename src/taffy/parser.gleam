@@ -171,9 +171,7 @@ fn validate_tag_handle(tag: String, parser: Parser) -> Result(Nil, ParseError) {
 
 /// Check if a tag is one of the always-valid forms.
 fn is_always_valid_tag(tag: String) -> Bool {
-  string.starts_with(tag, "!<")
-  || tag == "!"
-  || string.starts_with(tag, "!!")
+  string.starts_with(tag, "!<") || tag == "!" || string.starts_with(tag, "!!")
 }
 
 /// Validate a custom tag handle (e.g., !prefix!suffix) is defined via %TAG.

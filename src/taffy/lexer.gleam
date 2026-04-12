@@ -93,11 +93,7 @@ fn list_to_string(chars: List(String)) -> String {
 /// Back up the lexer by one position.
 fn back_up(lexer: Lexer) -> Lexer {
   let new_pos = lexer.pos - 1
-  Lexer(
-    ..lexer,
-    pos: new_pos,
-    rest: string.drop_start(lexer.input, new_pos),
-  )
+  Lexer(..lexer, pos: new_pos, rest: string.drop_start(lexer.input, new_pos))
 }
 
 /// Tokenizes the entire input.
@@ -472,10 +468,7 @@ fn read_until_newline(lexer: Lexer) -> #(String, Lexer) {
   read_until_newline_loop(lexer, [])
 }
 
-fn read_until_newline_loop(
-  lexer: Lexer,
-  acc: List(String),
-) -> #(String, Lexer) {
+fn read_until_newline_loop(lexer: Lexer, acc: List(String)) -> #(String, Lexer) {
   case peek(lexer) {
     None -> #(list_to_string(acc), lexer)
     Some("\n") -> #(list_to_string(acc), lexer)
@@ -488,18 +481,22 @@ fn read_identifier(lexer: Lexer) -> #(String, Lexer) {
   read_identifier_loop(lexer, [])
 }
 
-fn read_identifier_loop(
-  lexer: Lexer,
-  acc: List(String),
-) -> #(String, Lexer) {
+fn read_identifier_loop(lexer: Lexer, acc: List(String)) -> #(String, Lexer) {
   // YAML anchor/alias names can contain most characters except:
   // - whitespace (space, tab, newline)
   // - flow indicators: , [ ] { }
   // NOTE: Colons ARE allowed in anchor names per YAML 1.2 spec
   case peek(lexer) {
-    Some(" ") | Some("\t") | Some("\n") | Some("\r") | Some(",") | Some("[")
-    | Some("]") | Some("{") | Some("}") | None ->
-      #(list_to_string(acc), lexer)
+    Some(" ")
+    | Some("\t")
+    | Some("\n")
+    | Some("\r")
+    | Some(",")
+    | Some("[")
+    | Some("]")
+    | Some("{")
+    | Some("}")
+    | None -> #(list_to_string(acc), lexer)
     Some(c) -> read_identifier_loop(advance(lexer), [c, ..acc])
   }
 }
@@ -514,10 +511,7 @@ fn read_tag(lexer: Lexer) -> #(String, Lexer) {
 
 /// Read a verbatim tag (enclosed in angle brackets).
 /// These can contain any characters until the closing >.
-fn read_verbatim_tag(
-  lexer: Lexer,
-  acc: List(String),
-) -> #(String, Lexer) {
+fn read_verbatim_tag(lexer: Lexer, acc: List(String)) -> #(String, Lexer) {
   case peek(lexer) {
     Some(">") -> #(list_to_string([">", ..acc]), advance(lexer))
     Some(c) -> read_verbatim_tag(advance(lexer), [c, ..acc])
@@ -525,14 +519,18 @@ fn read_verbatim_tag(
   }
 }
 
-fn read_tag_loop(
-  lexer: Lexer,
-  acc: List(String),
-) -> #(String, Lexer) {
+fn read_tag_loop(lexer: Lexer, acc: List(String)) -> #(String, Lexer) {
   case peek(lexer) {
-    Some(" ") | Some("\t") | Some("\n") | Some("\r") | Some(",") | Some("[")
-    | Some("]") | Some("{") | Some("}") | None ->
-      #(list_to_string(acc), lexer)
+    Some(" ")
+    | Some("\t")
+    | Some("\n")
+    | Some("\r")
+    | Some(",")
+    | Some("[")
+    | Some("]")
+    | Some("{")
+    | Some("}")
+    | None -> #(list_to_string(acc), lexer)
     Some(c) -> read_tag_loop(advance(lexer), [c, ..acc])
   }
 }
@@ -2025,10 +2023,7 @@ fn read_until_eol(lexer: Lexer, prefix: String) -> #(String, Lexer) {
   })
 }
 
-fn read_until_eol_loop(
-  lexer: Lexer,
-  acc: List(String),
-) -> #(String, Lexer) {
+fn read_until_eol_loop(lexer: Lexer, acc: List(String)) -> #(String, Lexer) {
   case peek(lexer) {
     None -> #(list_to_string(acc), lexer)
     Some("\n") -> #(list_to_string(acc), lexer)
