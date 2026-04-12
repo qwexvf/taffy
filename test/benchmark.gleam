@@ -167,14 +167,15 @@ components:
     )
   io.println(
     bench.table(medium_result, [
-      bench.IPS, bench.Min, bench.Mean, bench.P(99),
+      bench.IPS,
+      bench.Min,
+      bench.Mean,
+      bench.P(99),
     ]),
   )
 
   io.println("")
-  io.println(
-    "--- Large YAML (~2000 lines, real-world spec) ---",
-  )
+  io.println("--- Large YAML (~2000 lines, real-world spec) ---")
   let large_result =
     bench.run(
       [bench.Input("large", large_yaml)],

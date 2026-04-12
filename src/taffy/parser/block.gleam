@@ -1236,11 +1236,7 @@ fn parse_explicit_key_after_newline(
     Some(lexer.Dash) ->
       parse_sequence_as_explicit_key(after_newline, 0, parse_value_fn)
     Some(lexer.Indent(n)) ->
-      parse_explicit_key_after_newline_indent(
-        after_newline,
-        n,
-        parse_value_fn,
-      )
+      parse_explicit_key_after_newline_indent(after_newline, n, parse_value_fn)
     Some(lexer.Colon) -> Ok(#("", after_newline))
     _ -> Ok(#("", original_parser))
   }
