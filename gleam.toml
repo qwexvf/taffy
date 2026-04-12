@@ -19,3 +19,6 @@ simplifile = ">= 2.4.0 and < 3.0.0"
 
 [dev_dependencies]
 gleeunit = ">= 1.0.0 and < 2.0.0"
+gleamy_bench = ">= 0.6.0 and < 1.0.0"
+yamerl = ">= 0.10.0 and < 1.0.0"
+fast_yaml = ">= 1.0.40 and < 2.0.0"

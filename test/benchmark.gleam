@@ -8,6 +8,7 @@ import gleam/string
 import gleamy/bench
 import simplifile
 import taffy
+import taffy/native as taffy_native
 
 // FFI bindings for fast_yaml
 @external(erlang, "fast_yaml", "decode")
@@ -119,12 +120,21 @@ components:
     bench.run(
       [bench.Input("small", small_yaml)],
       [
-        bench.Function("taffy (pure Gleam)", fn(yaml) { taffy.parse(yaml) }),
-        bench.Function("fast_yaml (C NIF)", fn(yaml) {
-          fast_yaml_decode(yaml)
+        bench.Function("taffy (pure Gleam)", fn(yaml) {
+          let _ = taffy.parse(yaml)
+          Nil
+        }),
+        bench.Function("taffy/native (C NIF)", fn(yaml) {
+          let _ = taffy_native.parse(yaml)
+          Nil
+        }),
+        bench.Function("fast_yaml (C NIF raw)", fn(yaml) {
+          let _ = fast_yaml_decode(yaml)
+          Nil
         }),
         bench.Function("yamerl (pure Erlang)", fn(yaml) {
-          yamerl_string(yaml)
+          let _ = yamerl_string(yaml)
+          Nil
         }),
       ],
       [bench.Duration(3000)],
@@ -139,12 +149,21 @@ components:
     bench.run(
       [bench.Input("medium", medium_yaml)],
       [
-        bench.Function("taffy (pure Gleam)", fn(yaml) { taffy.parse(yaml) }),
-        bench.Function("fast_yaml (C NIF)", fn(yaml) {
-          fast_yaml_decode(yaml)
+        bench.Function("taffy (pure Gleam)", fn(yaml) {
+          let _ = taffy.parse(yaml)
+          Nil
+        }),
+        bench.Function("taffy/native (C NIF)", fn(yaml) {
+          let _ = taffy_native.parse(yaml)
+          Nil
+        }),
+        bench.Function("fast_yaml (C NIF raw)", fn(yaml) {
+          let _ = fast_yaml_decode(yaml)
+          Nil
         }),
         bench.Function("yamerl (pure Erlang)", fn(yaml) {
-          yamerl_string(yaml)
+          let _ = yamerl_string(yaml)
+          Nil
         }),
       ],
       [bench.Duration(3000)],
@@ -163,12 +182,21 @@ components:
     bench.run(
       [bench.Input("large", large_yaml)],
       [
-        bench.Function("taffy (pure Gleam)", fn(yaml) { taffy.parse(yaml) }),
-        bench.Function("fast_yaml (C NIF)", fn(yaml) {
-          fast_yaml_decode(yaml)
+        bench.Function("taffy (pure Gleam)", fn(yaml) {
+          let _ = taffy.parse(yaml)
+          Nil
+        }),
+        bench.Function("taffy/native (C NIF)", fn(yaml) {
+          let _ = taffy_native.parse(yaml)
+          Nil
+        }),
+        bench.Function("fast_yaml (C NIF raw)", fn(yaml) {
+          let _ = fast_yaml_decode(yaml)
+          Nil
         }),
         bench.Function("yamerl (pure Erlang)", fn(yaml) {
-          yamerl_string(yaml)
+          let _ = yamerl_string(yaml)
+          Nil
         }),
       ],
       [bench.Duration(3000)],
