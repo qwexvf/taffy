@@ -296,7 +296,7 @@ fn parse_flow_mapping_pairs(
   use parser <- result.try(skip_flow_whitespace(parser))
 
   case current(parser) {
-    Some(lexer.BraceClose) -> Ok(#(value.Mapping(acc), advance(parser)))
+    Some(lexer.BraceClose) -> Ok(#(value.Mapping(list.reverse(acc)), advance(parser)))
 
     Some(lexer.Eof) | option.None ->
       Error(ParseError("Unterminated flow mapping", parser.pos))
@@ -319,14 +319,14 @@ fn parse_explicit_flow_mapping_pair(
   case current(parser) {
     Some(lexer.BraceClose) ->
       Ok(#(
-        value.Mapping(value.ordered_insert(acc, "", value.Null)),
+        value.Mapping(list.reverse([#("", value.Null), ..acc])),
         advance(parser),
       ))
 
     Some(lexer.Comma) ->
       parse_flow_mapping_pairs(
         advance(parser),
-        value.ordered_insert(acc, "", value.Null),
+        [#("", value.Null), ..acc],
       )
 
     Some(lexer.Colon) ->
@@ -345,11 +345,11 @@ fn parse_explicit_flow_mapping_pair(
         Some(lexer.Comma) ->
           parse_flow_mapping_pairs(
             advance(parser),
-            value.ordered_insert(acc, key, value.Null),
+            [#(key, value.Null), ..acc],
           )
         Some(lexer.BraceClose) ->
           Ok(#(
-            value.Mapping(value.ordered_insert(acc, key, value.Null)),
+            value.Mapping(list.reverse([#(key, value.Null), ..acc])),
             advance(parser),
           ))
         _ -> Error(ParseError("Expected ':', ',' or '}'", parser.pos))
@@ -368,11 +368,11 @@ fn parse_flow_mapping_colon_value(
     Some(lexer.Comma) ->
       parse_flow_mapping_pairs(
         advance(parser),
-        value.ordered_insert(acc, key, value.Null),
+        [#(key, value.Null), ..acc],
       )
     Some(lexer.BraceClose) ->
       Ok(#(
-        value.Mapping(value.ordered_insert(acc, key, value.Null)),
+        value.Mapping(list.reverse([#(key, value.Null), ..acc])),
         advance(parser),
       ))
     _ -> {
@@ -389,11 +389,11 @@ fn continue_flow_mapping(
   parser: Parser,
   acc: List(#(String, YamlValue)),
 ) -> Result(#(YamlValue, Parser), ParseError) {
-  let acc = value.ordered_insert(acc, key, val)
+  let acc = [#(key, val), ..acc]
   use parser <- result.try(skip_flow_whitespace(parser))
   case current(parser) {
     Some(lexer.Comma) -> parse_flow_mapping_pairs(advance(parser), acc)
-    Some(lexer.BraceClose) -> Ok(#(value.Mapping(acc), advance(parser)))
+    Some(lexer.BraceClose) -> Ok(#(value.Mapping(list.reverse(acc)), advance(parser)))
     _ -> Error(ParseError("Expected ',' or '}'", parser.pos))
   }
 }
@@ -421,12 +421,12 @@ fn parse_flow_mapping_value(
     Some(lexer.Comma) ->
       parse_flow_mapping_pairs(
         advance(parser),
-        value.ordered_insert(acc, key, value.Null),
+        [#(key, value.Null), ..acc],
       )
 
     Some(lexer.BraceClose) -> {
-      let acc = value.ordered_insert(acc, key, value.Null)
-      Ok(#(value.Mapping(acc), advance(parser)))
+      let acc = [#(key, value.Null), ..acc]
+      Ok(#(value.Mapping(list.reverse(acc)), advance(parser)))
     }
 
     _ -> Error(ParseError("Expected ':', ',' or '}'", parser.pos))

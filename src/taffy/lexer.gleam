@@ -59,6 +59,8 @@ pub type Token {
 pub type Lexer {
   Lexer(
     input: String,
+    /// The remaining input from pos onwards (avoids re-slicing).
+    rest: String,
     pos: Int,
     line: Int,
     col: Int,
@@ -73,12 +75,28 @@ pub type Lexer {
 pub fn new(input: String) -> Lexer {
   Lexer(
     input: input,
+    rest: input,
     pos: 0,
     line: 1,
     col: 0,
     in_document: False,
     flow_level: 0,
     quoted_open_col: 0,
+  )
+}
+
+/// Convert a reversed list of string fragments to a string (O(n)).
+fn list_to_string(chars: List(String)) -> String {
+  chars |> list.reverse |> string.join("")
+}
+
+/// Back up the lexer by one position.
+fn back_up(lexer: Lexer) -> Lexer {
+  let new_pos = lexer.pos - 1
+  Lexer(
+    ..lexer,
+    pos: new_pos,
+    rest: string.drop_start(lexer.input, new_pos),
   )
 }
 
@@ -179,7 +197,7 @@ pub fn next_token(lexer: Lexer) -> Result(#(Token, Lexer), String) {
               Ok(#(Colon, lexer))
             _ -> {
               // Part of a plain scalar
-              read_plain_scalar(Lexer(..lexer, pos: lexer.pos - 1))
+              read_plain_scalar(back_up(lexer))
             }
           }
         }
@@ -191,7 +209,7 @@ pub fn next_token(lexer: Lexer) -> Result(#(Token, Lexer), String) {
               Ok(#(Question, lexer))
             _ -> {
               // Part of a plain scalar
-              read_plain_scalar(Lexer(..lexer, pos: lexer.pos - 1))
+              read_plain_scalar(back_up(lexer))
             }
           }
         }
@@ -221,7 +239,7 @@ pub fn next_token(lexer: Lexer) -> Result(#(Token, Lexer), String) {
                 -> Error("Invalid use of dash indicator in flow context")
                 _ -> {
                   // Part of a plain scalar (like negative number)
-                  read_plain_scalar(Lexer(..lexer, pos: lexer.pos - 1))
+                  read_plain_scalar(back_up(lexer))
                 }
               }
             }
@@ -324,24 +342,32 @@ pub fn next_token(lexer: Lexer) -> Result(#(Token, Lexer), String) {
 }
 
 fn peek(lexer: Lexer) -> Option(String) {
-  case string.drop_start(lexer.input, lexer.pos) {
+  case lexer.rest {
     "" -> None
-    s -> Some(string.slice(s, 0, 1))
+    _ -> Some(string.slice(lexer.rest, 0, 1))
   }
 }
 
 fn peek_n(lexer: Lexer, n: Int) -> String {
-  lexer.input
-  |> string.drop_start(lexer.pos)
-  |> string.slice(0, n)
+  string.slice(lexer.rest, 0, n)
 }
 
 fn advance(lexer: Lexer) -> Lexer {
-  Lexer(..lexer, pos: lexer.pos + 1, col: lexer.col + 1)
+  Lexer(
+    ..lexer,
+    pos: lexer.pos + 1,
+    col: lexer.col + 1,
+    rest: string.drop_start(lexer.rest, 1),
+  )
 }
 
 fn advance_n(lexer: Lexer, n: Int) -> Lexer {
-  Lexer(..lexer, pos: lexer.pos + n, col: lexer.col + n)
+  Lexer(
+    ..lexer,
+    pos: lexer.pos + n,
+    col: lexer.col + n,
+    rest: string.drop_start(lexer.rest, n),
+  )
 }
 
 fn count_indent(lexer: Lexer) -> Result(#(Int, Lexer), String) {
@@ -450,23 +476,29 @@ fn scan_for_mapping_colon(lexer: Lexer) -> Bool {
 }
 
 fn read_until_newline(lexer: Lexer) -> #(String, Lexer) {
-  read_until_newline_loop(lexer, "")
+  read_until_newline_loop(lexer, [])
 }
 
-fn read_until_newline_loop(lexer: Lexer, acc: String) -> #(String, Lexer) {
+fn read_until_newline_loop(
+  lexer: Lexer,
+  acc: List(String),
+) -> #(String, Lexer) {
   case peek(lexer) {
-    None -> #(acc, lexer)
-    Some("\n") -> #(acc, lexer)
-    Some("\r") -> #(acc, lexer)
-    Some(c) -> read_until_newline_loop(advance(lexer), acc <> c)
+    None -> #(list_to_string(acc), lexer)
+    Some("\n") -> #(list_to_string(acc), lexer)
+    Some("\r") -> #(list_to_string(acc), lexer)
+    Some(c) -> read_until_newline_loop(advance(lexer), [c, ..acc])
   }
 }
 
 fn read_identifier(lexer: Lexer) -> #(String, Lexer) {
-  read_identifier_loop(lexer, "")
+  read_identifier_loop(lexer, [])
 }
 
-fn read_identifier_loop(lexer: Lexer, acc: String) -> #(String, Lexer) {
+fn read_identifier_loop(
+  lexer: Lexer,
+  acc: List(String),
+) -> #(String, Lexer) {
   // YAML anchor/alias names can contain most characters except:
   // - whitespace (space, tab, newline)
   // - flow indicators: , [ ] { }
@@ -474,51 +506,59 @@ fn read_identifier_loop(lexer: Lexer, acc: String) -> #(String, Lexer) {
   case peek(lexer) {
     Some(c) -> {
       case c {
-        " " | "\t" | "\n" | "\r" | "," | "[" | "]" | "{" | "}" -> #(acc, lexer)
-        _ -> read_identifier_loop(advance(lexer), acc <> c)
+        " " | "\t" | "\n" | "\r" | "," | "[" | "]" | "{" | "}" ->
+          #(list_to_string(acc), lexer)
+        _ -> read_identifier_loop(advance(lexer), [c, ..acc])
       }
     }
-    _ -> #(acc, lexer)
+    _ -> #(list_to_string(acc), lexer)
   }
 }
 
 fn read_tag(lexer: Lexer) -> #(String, Lexer) {
   // Check if this is a verbatim tag (starts with <)
   case peek(lexer) {
-    Some("<") -> read_verbatim_tag(advance(lexer), "!<")
-    _ -> read_tag_loop(lexer, "!")
+    Some("<") -> read_verbatim_tag(advance(lexer), ["<", "!"])
+    _ -> read_tag_loop(lexer, ["!"])
   }
 }
 
 /// Read a verbatim tag (enclosed in angle brackets).
 /// These can contain any characters until the closing >.
-fn read_verbatim_tag(lexer: Lexer, acc: String) -> #(String, Lexer) {
+fn read_verbatim_tag(
+  lexer: Lexer,
+  acc: List(String),
+) -> #(String, Lexer) {
   case peek(lexer) {
-    Some(">") -> #(acc <> ">", advance(lexer))
-    Some(c) -> read_verbatim_tag(advance(lexer), acc <> c)
-    None -> #(acc, lexer)
+    Some(">") -> #(list_to_string([">", ..acc]), advance(lexer))
+    Some(c) -> read_verbatim_tag(advance(lexer), [c, ..acc])
+    None -> #(list_to_string(acc), lexer)
   }
 }
 
-fn read_tag_loop(lexer: Lexer, acc: String) -> #(String, Lexer) {
+fn read_tag_loop(
+  lexer: Lexer,
+  acc: List(String),
+) -> #(String, Lexer) {
   case peek(lexer) {
     Some(c) -> {
       case c {
-        " " | "\t" | "\n" | "\r" | "," | "[" | "]" | "{" | "}" -> #(acc, lexer)
-        _ -> read_tag_loop(advance(lexer), acc <> c)
+        " " | "\t" | "\n" | "\r" | "," | "[" | "]" | "{" | "}" ->
+          #(list_to_string(acc), lexer)
+        _ -> read_tag_loop(advance(lexer), [c, ..acc])
       }
     }
-    _ -> #(acc, lexer)
+    _ -> #(list_to_string(acc), lexer)
   }
 }
 
 fn read_single_quoted(lexer: Lexer) -> Result(#(Token, Lexer), String) {
-  read_single_quoted_loop(lexer, "", False)
+  read_single_quoted_loop(lexer, [], False)
 }
 
 fn read_single_quoted_loop(
   lexer: Lexer,
-  acc: String,
+  acc: List(String),
   multiline: Bool,
 ) -> Result(#(Token, Lexer), String) {
   case peek(lexer) {
@@ -528,12 +568,14 @@ fn read_single_quoted_loop(
       let lexer = advance(lexer)
       case peek(lexer) {
         Some("'") ->
-          read_single_quoted_loop(advance(lexer), acc <> "'", multiline)
-        _ ->
+          read_single_quoted_loop(advance(lexer), ["'", ..acc], multiline)
+        _ -> {
+          let s = list_to_string(acc)
           case multiline {
-            True -> check_multiline_implicit_key(lexer, SingleQuoted(acc))
-            False -> Ok(#(SingleQuoted(acc), lexer))
+            True -> check_multiline_implicit_key(lexer, SingleQuoted(s))
+            False -> Ok(#(SingleQuoted(s), lexer))
           }
+        }
       }
     }
     // Handle newline folding in single-quoted strings
@@ -552,11 +594,11 @@ fn read_single_quoted_loop(
           case peek(lexer) {
             Some("\n") -> {
               // Empty line - preserve as newline
-              read_single_quoted_loop(lexer, acc <> "\n", True)
+              read_single_quoted_loop(lexer, ["\n", ..acc], True)
             }
             _ -> {
               // Single newline is folded to space
-              read_single_quoted_loop(lexer, acc <> " ", True)
+              read_single_quoted_loop(lexer, [" ", ..acc], True)
             }
           }
         }
@@ -579,13 +621,13 @@ fn read_single_quoted_loop(
           let lexer = skip_quoted_continuation_whitespace(lexer)
           case peek(lexer) {
             Some("\n") | Some("\r") ->
-              read_single_quoted_loop(lexer, acc <> "\n", True)
-            _ -> read_single_quoted_loop(lexer, acc <> " ", True)
+              read_single_quoted_loop(lexer, ["\n", ..acc], True)
+            _ -> read_single_quoted_loop(lexer, [" ", ..acc], True)
           }
         }
       }
     }
-    Some(c) -> read_single_quoted_loop(advance(lexer), acc <> c, multiline)
+    Some(c) -> read_single_quoted_loop(advance(lexer), [c, ..acc], multiline)
   }
 }
 
@@ -672,7 +714,7 @@ fn read_double_quoted(lexer: Lexer) -> Result(#(Token, Lexer), String) {
       True -> lexer.col
       False -> 0
     })
-  read_double_quoted_loop(lexer, "", "", False)
+  read_double_quoted_loop(lexer, [], "", False)
 }
 
 /// Check if the current position is after a mapping colon (: followed by space).
@@ -693,144 +735,148 @@ fn is_after_mapping_colon(lexer: Lexer) -> Bool {
 /// pending_ws tracks literal whitespace that gets trimmed if followed by newline.
 fn read_double_quoted_loop(
   lexer: Lexer,
-  acc: String,
+  acc: List(String),
   pending_ws: String,
   multiline: Bool,
 ) -> Result(#(Token, Lexer), String) {
   case peek(lexer) {
     None -> Error("Unterminated double-quoted string")
     // Include pending whitespace before closing quote
-    Some("\"") ->
-      case multiline {
-        True ->
-          check_multiline_implicit_key(
-            advance(lexer),
-            DoubleQuoted(acc <> pending_ws),
-          )
-        False -> Ok(#(DoubleQuoted(acc <> pending_ws), advance(lexer)))
+    Some("\"") -> {
+      let s = case pending_ws {
+        "" -> list_to_string(acc)
+        _ -> list_to_string([pending_ws, ..acc])
       }
+      case multiline {
+        True -> check_multiline_implicit_key(advance(lexer), DoubleQuoted(s))
+        False -> Ok(#(DoubleQuoted(s), advance(lexer)))
+      }
+    }
     Some("\\") -> {
       // Escape sequences flush pending whitespace (they're not trailing)
-      let full_acc = acc <> pending_ws
+      let full_acc = case pending_ws {
+        "" -> acc
+        _ -> [pending_ws, ..acc]
+      }
       let lexer = advance(lexer)
       case peek(lexer) {
         None -> Error("Unterminated escape sequence")
         Some("n") ->
           read_double_quoted_loop(
             advance(lexer),
-            full_acc <> "\n",
+            ["\n", ..full_acc],
             "",
             multiline,
           )
         Some("t") ->
           read_double_quoted_loop(
             advance(lexer),
-            full_acc <> "\t",
+            ["\t", ..full_acc],
             "",
             multiline,
           )
         Some("r") ->
           read_double_quoted_loop(
             advance(lexer),
-            full_acc <> "\r",
+            ["\r", ..full_acc],
             "",
             multiline,
           )
         Some("\\") ->
           read_double_quoted_loop(
             advance(lexer),
-            full_acc <> "\\",
+            ["\\", ..full_acc],
             "",
             multiline,
           )
         Some("\"") ->
           read_double_quoted_loop(
             advance(lexer),
-            full_acc <> "\"",
+            ["\"", ..full_acc],
             "",
             multiline,
           )
         Some("/") ->
           read_double_quoted_loop(
             advance(lexer),
-            full_acc <> "/",
+            ["/", ..full_acc],
             "",
             multiline,
           )
         Some("0") ->
           read_double_quoted_loop(
             advance(lexer),
-            full_acc <> "\u{0000}",
+            ["\u{0000}", ..full_acc],
             "",
             multiline,
           )
         Some("a") ->
           read_double_quoted_loop(
             advance(lexer),
-            full_acc <> "\u{0007}",
+            ["\u{0007}", ..full_acc],
             "",
             multiline,
           )
         Some("b") ->
           read_double_quoted_loop(
             advance(lexer),
-            full_acc <> "\u{0008}",
+            ["\u{0008}", ..full_acc],
             "",
             multiline,
           )
         Some("e") ->
           read_double_quoted_loop(
             advance(lexer),
-            full_acc <> "\u{001B}",
+            ["\u{001B}", ..full_acc],
             "",
             multiline,
           )
         Some("f") ->
           read_double_quoted_loop(
             advance(lexer),
-            full_acc <> "\u{000C}",
+            ["\u{000C}", ..full_acc],
             "",
             multiline,
           )
         Some("v") ->
           read_double_quoted_loop(
             advance(lexer),
-            full_acc <> "\u{000B}",
+            ["\u{000B}", ..full_acc],
             "",
             multiline,
           )
         Some("N") ->
           read_double_quoted_loop(
             advance(lexer),
-            full_acc <> "\u{0085}",
+            ["\u{0085}", ..full_acc],
             "",
             multiline,
           )
         Some("_") ->
           read_double_quoted_loop(
             advance(lexer),
-            full_acc <> "\u{00A0}",
+            ["\u{00A0}", ..full_acc],
             "",
             multiline,
           )
         Some("L") ->
           read_double_quoted_loop(
             advance(lexer),
-            full_acc <> "\u{2028}",
+            ["\u{2028}", ..full_acc],
             "",
             multiline,
           )
         Some("P") ->
           read_double_quoted_loop(
             advance(lexer),
-            full_acc <> "\u{2029}",
+            ["\u{2029}", ..full_acc],
             "",
             multiline,
           )
         Some(" ") ->
           read_double_quoted_loop(
             advance(lexer),
-            full_acc <> " ",
+            [" ", ..full_acc],
             "",
             multiline,
           )
@@ -937,19 +983,19 @@ fn read_double_quoted_loop(
         multiline,
       )
     // Non-whitespace - flush pending_ws and add character
-    Some(c) ->
-      read_double_quoted_loop(
-        advance(lexer),
-        acc <> pending_ws <> c,
-        "",
-        multiline,
-      )
+    Some(c) -> {
+      let new_acc = case pending_ws {
+        "" -> [c, ..acc]
+        _ -> [c, pending_ws, ..acc]
+      }
+      read_double_quoted_loop(advance(lexer), new_acc, "", multiline)
+    }
   }
 }
 
 fn skip_line_continuation(
   lexer: Lexer,
-  acc: String,
+  acc: List(String),
 ) -> Result(#(Token, Lexer), String) {
   // Skip leading whitespace on the continuation line
   case peek(lexer) {
@@ -963,7 +1009,7 @@ fn skip_line_continuation(
 /// Blank lines (just whitespace) become \n, otherwise fold to space.
 fn handle_double_quoted_fold(
   lexer: Lexer,
-  acc: String,
+  acc: List(String),
   newlines: String,
 ) -> Result(#(Token, Lexer), String) {
   case peek(lexer) {
@@ -1001,8 +1047,8 @@ fn handle_double_quoted_fold(
     // Content found - add accumulated newlines or fold to space
     _ -> {
       case newlines {
-        "" -> read_double_quoted_loop(lexer, acc <> " ", "", True)
-        _ -> read_double_quoted_loop(lexer, acc <> newlines, "", True)
+        "" -> read_double_quoted_loop(lexer, [" ", ..acc], "", True)
+        _ -> read_double_quoted_loop(lexer, [newlines, ..acc], "", True)
       }
     }
   }
@@ -1010,11 +1056,11 @@ fn handle_double_quoted_fold(
 
 fn read_hex_escape(
   lexer: Lexer,
-  acc: String,
+  acc: List(String),
   digits: Int,
   multiline: Bool,
 ) -> Result(#(Token, Lexer), String) {
-  case read_hex_digits(lexer, "", digits) {
+  case read_hex_digits(lexer, [], digits) {
     Error(e) -> Error(e)
     Ok(#(hex_str, lexer)) -> {
       case parse_hex(hex_str) {
@@ -1023,7 +1069,7 @@ fn read_hex_escape(
             Ok(cp) ->
               read_double_quoted_loop(
                 lexer,
-                acc <> string.from_utf_codepoints([cp]),
+                [string.from_utf_codepoints([cp]), ..acc],
                 "",
                 multiline,
               )
@@ -1038,17 +1084,17 @@ fn read_hex_escape(
 
 fn read_hex_digits(
   lexer: Lexer,
-  acc: String,
+  acc: List(String),
   remaining: Int,
 ) -> Result(#(String, Lexer), String) {
   case remaining {
-    0 -> Ok(#(acc, lexer))
+    0 -> Ok(#(list_to_string(acc), lexer))
     _ -> {
       case peek(lexer) {
         None -> Error("Unterminated hex escape")
         Some(c) -> {
           case is_hex_char(c) {
-            True -> read_hex_digits(advance(lexer), acc <> c, remaining - 1)
+            True -> read_hex_digits(advance(lexer), [c, ..acc], remaining - 1)
             False -> Error("Invalid hex character: " <> c)
           }
         }
@@ -1119,23 +1165,25 @@ fn hex_value(c: String) -> Result(Int, Nil) {
 }
 
 fn read_plain_scalar(lexer: Lexer) -> Result(#(Token, Lexer), String) {
-  read_plain_scalar_loop(lexer, "")
+  read_plain_scalar_loop(lexer, [])
 }
 
 fn read_plain_scalar_loop(
   lexer: Lexer,
-  acc: String,
+  acc: List(String),
 ) -> Result(#(Token, Lexer), String) {
   case peek(lexer) {
-    None -> Ok(#(Plain(string.trim_end(acc)), lexer))
-    Some("\n") | Some("\r") -> Ok(#(Plain(string.trim_end(acc)), lexer))
+    None -> Ok(#(Plain(string.trim_end(list_to_string(acc))), lexer))
+    Some("\n") | Some("\r") ->
+      Ok(#(Plain(string.trim_end(list_to_string(acc))), lexer))
     Some(",") | Some("]") | Some("}") ->
-      Ok(#(Plain(string.trim_end(acc)), lexer))
+      Ok(#(Plain(string.trim_end(list_to_string(acc))), lexer))
     Some("#") -> {
       // Check if preceded by space or tab (comment)
-      case string.ends_with(acc, " ") || string.ends_with(acc, "\t") {
-        True -> Ok(#(Plain(string.trim_end(acc)), lexer))
-        False -> read_plain_scalar_loop(advance(lexer), acc <> "#")
+      case acc {
+        [" ", ..] | ["\t", ..] ->
+          Ok(#(Plain(string.trim_end(list_to_string(acc))), lexer))
+        _ -> read_plain_scalar_loop(advance(lexer), ["#", ..acc])
       }
     }
     Some(":") -> {
@@ -1143,11 +1191,11 @@ fn read_plain_scalar_loop(
       let next_lexer = advance(lexer)
       case peek(next_lexer) {
         Some(" ") | Some("\t") | Some("\n") | Some("\r") | None ->
-          Ok(#(Plain(string.trim_end(acc)), lexer))
-        _ -> read_plain_scalar_loop(next_lexer, acc <> ":")
+          Ok(#(Plain(string.trim_end(list_to_string(acc))), lexer))
+        _ -> read_plain_scalar_loop(next_lexer, [":", ..acc])
       }
     }
-    Some(c) -> read_plain_scalar_loop(advance(lexer), acc <> c)
+    Some(c) -> read_plain_scalar_loop(advance(lexer), [c, ..acc])
   }
 }
 
@@ -1781,7 +1829,7 @@ fn check_literal_continuation_ex(
           // At indent 0, check for document markers which terminate the block
           case indent == 0 && is_doc_marker(after_spaces) {
             True -> {
-              let backed_up = Lexer(..lexer, pos: lexer.pos - 1)
+              let backed_up = back_up(lexer)
               #(acc, backed_up)
             }
             False -> {
@@ -1827,7 +1875,7 @@ fn check_literal_continuation_ex(
         False -> {
           // Block ends - back up to before the newline so it gets tokenized
           // The lexer is at start of line (after newline was consumed), so back up by 1
-          let backed_up = Lexer(..lexer, pos: lexer.pos - 1)
+          let backed_up = back_up(lexer)
           #(acc, backed_up)
         }
       }
@@ -1994,12 +2042,22 @@ fn read_folded_lines_content(
   }
 }
 
-fn read_until_eol(lexer: Lexer, acc: String) -> #(String, Lexer) {
+fn read_until_eol(lexer: Lexer, prefix: String) -> #(String, Lexer) {
+  read_until_eol_loop(lexer, case prefix {
+    "" -> []
+    _ -> [prefix]
+  })
+}
+
+fn read_until_eol_loop(
+  lexer: Lexer,
+  acc: List(String),
+) -> #(String, Lexer) {
   case peek(lexer) {
-    None -> #(acc, lexer)
-    Some("\n") -> #(acc, lexer)
-    Some("\r") -> #(acc, lexer)
-    Some(c) -> read_until_eol(advance(lexer), acc <> c)
+    None -> #(list_to_string(acc), lexer)
+    Some("\n") -> #(list_to_string(acc), lexer)
+    Some("\r") -> #(list_to_string(acc), lexer)
+    Some(c) -> read_until_eol_loop(advance(lexer), [c, ..acc])
   }
 }
 

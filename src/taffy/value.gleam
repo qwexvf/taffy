@@ -44,6 +44,16 @@ pub fn ordered_insert(
   }
 }
 
+/// Prepend a key-value pair to an accumulator list (O(1)).
+/// Use list.reverse when the mapping is complete.
+pub fn prepend_pair(
+  pairs: List(#(String, YamlValue)),
+  key: String,
+  val: YamlValue,
+) -> List(#(String, YamlValue)) {
+  [#(key, val), ..pairs]
+}
+
 fn has_key(pairs: List(#(String, a)), key: String) -> Bool {
   case pairs {
     [] -> False

@@ -560,7 +560,7 @@ fn parse_block_mapping_pairs_col(
   parse_value_fn: ParseValueFn,
 ) -> Result(#(YamlValue, Parser), ParseError) {
   let parser = skip_newlines_and_comments(parser)
-  let done = Ok(#(value.Mapping(acc), parser))
+  let done = Ok(#(value.Mapping(list.reverse(acc)), parser))
 
   case current(parser) {
     Some(lexer.Indent(n)) -> {
@@ -679,7 +679,7 @@ fn parse_indented_mapping_pair_col(
   pre_indent_parser: Parser,
   parse_value_fn: ParseValueFn,
 ) -> Result(#(YamlValue, Parser), ParseError) {
-  let backtrack = Ok(#(value.Mapping(acc), pre_indent_parser))
+  let backtrack = Ok(#(value.Mapping(list.reverse(acc)), pre_indent_parser))
   case current(parser) {
     Some(lexer.Colon) ->
       add_key_value_pair_col(
@@ -740,7 +740,7 @@ fn add_key_value_pair_col(
     key_indent,
     parse_value_fn,
   ))
-  let acc = value.ordered_insert(acc, key, val)
+  let acc = [#(key, val), ..acc]
   parse_block_mapping_pairs_col(
     parser,
     mapping_indent,
@@ -818,7 +818,7 @@ fn parse_alias_key(
             acc,
             parse_value_fn,
           )
-        _ -> Ok(#(value.Mapping(acc), parser))
+        _ -> Ok(#(value.Mapping(list.reverse(acc)), parser))
       }
     }
     Error(_) -> Error(ParseError("Unknown anchor: " <> name, parser.pos))
@@ -858,13 +858,13 @@ fn parse_anchored_key(
                     value.String(key),
                   ),
                 )
-              let acc = value.ordered_insert(acc, key, val)
+              let acc = [#(key, val), ..acc]
               parse_block_mapping_pairs(parser, min_indent, acc, parse_value_fn)
             }
-            _ -> Ok(#(value.Mapping(acc), parser))
+            _ -> Ok(#(value.Mapping(list.reverse(acc)), parser))
           }
         }
-        Error(_) -> Ok(#(value.Mapping(acc), parser))
+        Error(_) -> Ok(#(value.Mapping(list.reverse(acc)), parser))
       }
   }
 }
@@ -889,10 +889,10 @@ fn parse_tagged_key(
             acc,
             parse_value_fn,
           )
-        _ -> Ok(#(value.Mapping(acc), parser))
+        _ -> Ok(#(value.Mapping(list.reverse(acc)), parser))
       }
     }
-    Error(_) -> Ok(#(value.Mapping(acc), parser))
+    Error(_) -> Ok(#(value.Mapping(list.reverse(acc)), parser))
   }
 }
 
@@ -1023,7 +1023,7 @@ fn handle_explicit_key_value(
       parse_block_mapping_pairs(
         parser,
         min_indent,
-        value.ordered_insert(acc, key, val),
+        [#(key, val), ..acc],
         parse_value_fn,
       )
     }
@@ -1039,7 +1039,7 @@ fn handle_explicit_key_value(
       )
 
     Some(lexer.Question) -> {
-      let acc = value.ordered_insert(acc, key, value.Null)
+      let acc = [#(key, value.Null), ..acc]
       parse_explicit_key_in_mapping(
         parser,
         min_indent,
@@ -1050,7 +1050,7 @@ fn handle_explicit_key_value(
     }
 
     _ -> {
-      let acc = value.ordered_insert(acc, key, value.Null)
+      let acc = [#(key, value.Null), ..acc]
       parse_block_mapping_pairs(parser, min_indent, acc, parse_value_fn)
     }
   }
@@ -1074,13 +1074,13 @@ fn handle_indented_explicit_key_value(
       parse_block_mapping_pairs(
         parser,
         min_indent,
-        value.ordered_insert(acc, key, val),
+        [#(key, val), ..acc],
         parse_value_fn,
       )
     }
 
     Some(lexer.Question) -> {
-      let acc = value.ordered_insert(acc, key, value.Null)
+      let acc = [#(key, value.Null), ..acc]
       parse_explicit_key_in_mapping(
         parser,
         min_indent,
@@ -1091,7 +1091,7 @@ fn handle_indented_explicit_key_value(
     }
 
     Some(lexer.Plain(s)) -> {
-      let acc = value.ordered_insert(acc, key, value.Null)
+      let acc = [#(key, value.Null), ..acc]
       let parser = advance(parser) |> skip_spaces
       case current(parser) {
         Some(lexer.Colon) -> {
@@ -1102,16 +1102,16 @@ fn handle_indented_explicit_key_value(
           parse_block_mapping_pairs(
             parser,
             min_indent,
-            value.ordered_insert(acc, s, val),
+            [#(s, val), ..acc],
             parse_value_fn,
           )
         }
-        _ -> Ok(#(value.Mapping(acc), parser))
+        _ -> Ok(#(value.Mapping(list.reverse(acc)), parser))
       }
     }
 
     _ -> {
-      let acc = value.ordered_insert(acc, key, value.Null)
+      let acc = [#(key, value.Null), ..acc]
       parse_block_mapping_pairs(parser, min_indent, acc, parse_value_fn)
     }
   }
