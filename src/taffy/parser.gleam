@@ -5,16 +5,16 @@ import gleam/list
 import gleam/option.{None, Some}
 import gleam/result
 import gleam/string
-import yaml/lexer.{type Token}
-import yaml/parser/block
-import yaml/parser/explicit
-import yaml/parser/flow
-import yaml/parser/helpers.{
+import taffy/lexer.{type Token}
+import taffy/parser/block
+import taffy/parser/explicit
+import taffy/parser/flow
+import taffy/parser/helpers.{
   advance, current, skip_newlines_and_comments, skip_spaces, token_to_string,
 }
-import yaml/parser/scalar
-import yaml/parser/types.{type ParseError, type Parser, ParseError, Parser}
-import yaml/value.{type YamlValue}
+import taffy/parser/scalar
+import taffy/parser/types.{type ParseError, type Parser, ParseError, Parser}
+import taffy/value.{type YamlValue}
 
 /// Creates a new parser from tokens.
 pub fn new(tokens: List(Token)) -> Parser {
@@ -403,7 +403,7 @@ pub fn parse_value(
       use _ <- result.try(validate_tag_handle(tag, parser))
       let parser = advance(parser) |> skip_spaces
       let is_str_tag =
-        tag == "!!str" || string.contains(tag, "tag:yaml.org,2002:str")
+        tag == "!!str" || string.contains(tag, "tag:taffy.org,2002:str")
       // Non-specific tag `!` means "don't do type resolution" (keep as string)
       let is_non_specific = tag == "!"
       case current(parser), is_str_tag, is_non_specific {

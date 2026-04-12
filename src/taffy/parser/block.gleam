@@ -4,13 +4,13 @@ import gleam/dict
 import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/result
-import yaml/lexer
-import yaml/parser/helpers.{
+import taffy/lexer
+import taffy/parser/helpers.{
   advance, current, skip_newlines_and_comments, skip_spaces,
 }
-import yaml/parser/scalar.{value_to_string}
-import yaml/parser/types.{type ParseError, type Parser, ParseError, Parser}
-import yaml/value.{type YamlValue}
+import taffy/parser/scalar.{value_to_string}
+import taffy/parser/types.{type ParseError, type Parser, ParseError, Parser}
+import taffy/value.{type YamlValue}
 
 /// Type alias for parse_value function to avoid circular imports.
 pub type ParseValueFn =

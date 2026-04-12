@@ -4,7 +4,7 @@ import gleam/float
 import gleam/int
 import gleam/list
 import gleam/string
-import yaml/value.{type YamlValue}
+import taffy/value.{type YamlValue}
 
 /// Parse a plain scalar into typed value.
 pub fn parse_scalar(s: String) -> YamlValue {

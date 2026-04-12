@@ -2,8 +2,8 @@
 
 import gleam/dict.{type Dict}
 import gleam/option.{type Option, None}
-import yaml/lexer.{type Token}
-import yaml/value.{type YamlValue}
+import taffy/lexer.{type Token}
+import taffy/value.{type YamlValue}
 
 /// Parser state.
 pub type Parser {

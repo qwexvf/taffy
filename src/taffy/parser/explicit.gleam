@@ -3,15 +3,15 @@
 import gleam/dict
 import gleam/option.{Some}
 import gleam/result
-import yaml/lexer
-import yaml/parser/block
-import yaml/parser/flow
-import yaml/parser/helpers.{
+import taffy/lexer
+import taffy/parser/block
+import taffy/parser/flow
+import taffy/parser/helpers.{
   advance, current, skip_newlines_and_comments, skip_spaces, token_to_string,
 }
-import yaml/parser/scalar.{value_to_key_string, value_to_string}
-import yaml/parser/types.{type ParseError, type Parser, ParseError, Parser}
-import yaml/value.{type YamlValue}
+import taffy/parser/scalar.{value_to_key_string, value_to_string}
+import taffy/parser/types.{type ParseError, type Parser, ParseError, Parser}
+import taffy/value.{type YamlValue}
 
 /// Type alias for parse_value function to avoid circular imports.
 pub type ParseValueFn =
