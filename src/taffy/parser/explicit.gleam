@@ -1,6 +1,7 @@
 //// Explicit mapping parsing (using ? for keys).
 
 import gleam/dict
+import gleam/list
 import gleam/option.{Some}
 import gleam/result
 import taffy/lexer
@@ -90,7 +91,7 @@ fn parse_explicit_mapping_items(
         acc,
         parse_value_fn,
       )
-    _ -> Ok(#(value.Mapping(acc), parser))
+    _ -> Ok(#(value.Mapping(list.reverse(acc)), parser))
   }
 }
 
@@ -111,7 +112,7 @@ fn parse_after_explicit_key(
         min_indent,
         parse_value_fn,
       ))
-      let acc = value.ordered_insert(acc, key, val)
+      let acc = [#(key, val), ..acc]
       parse_explicit_mapping_items(parser, min_indent, acc, parse_value_fn)
     }
     Some(lexer.Indent(n)) ->
@@ -125,11 +126,11 @@ fn parse_after_explicit_key(
       )
     // No colon, key maps to null — check for continuation
     Some(lexer.Question) -> {
-      let acc = value.ordered_insert(acc, key, value.Null)
+      let acc = [#(key, value.Null), ..acc]
       parse_explicit_mapping_items(parser, min_indent, acc, parse_value_fn)
     }
     _ -> {
-      let acc = value.ordered_insert(acc, key, value.Null)
+      let acc = [#(key, value.Null), ..acc]
       parse_explicit_mapping_items(parser, min_indent, acc, parse_value_fn)
     }
   }
@@ -148,11 +149,11 @@ fn parse_after_explicit_key_indent(
     Some(lexer.Colon) -> {
       let parser = advance(parser) |> skip_spaces
       use #(val, parser) <- result.try(parse_value_fn(parser, n + 1))
-      let acc = value.ordered_insert(acc, key, val)
+      let acc = [#(key, val), ..acc]
       parse_explicit_mapping_items(parser, min_indent, acc, parse_value_fn)
     }
     Some(lexer.Question) -> {
-      let acc = value.ordered_insert(acc, key, value.Null)
+      let acc = [#(key, value.Null), ..acc]
       parse_explicit_mapping_items_at_indent(
         parser,
         min_indent,
@@ -162,7 +163,7 @@ fn parse_after_explicit_key_indent(
       )
     }
     Some(lexer.Plain(s)) -> {
-      let acc = value.ordered_insert(acc, key, value.Null)
+      let acc = [#(key, value.Null), ..acc]
       parse_mixed_mapping_from_plain(
         parser,
         s,
@@ -173,7 +174,7 @@ fn parse_after_explicit_key_indent(
       )
     }
     _ -> {
-      let acc = value.ordered_insert(acc, key, value.Null)
+      let acc = [#(key, value.Null), ..acc]
       parse_explicit_mapping_items(parser, min_indent, acc, parse_value_fn)
     }
   }
@@ -199,7 +200,7 @@ fn try_implicit_key(
         acc,
         parse_value_fn,
       )
-    _ -> Ok(#(value.Mapping(acc), parser))
+    _ -> Ok(#(value.Mapping(list.reverse(acc)), parser))
   }
 }
 
@@ -213,7 +214,7 @@ fn parse_key_value_pair(
   parse_value_fn: ParseValueFn,
 ) -> Result(#(YamlValue, Parser), ParseError) {
   use #(val, parser) <- result.try(parse_value_fn(parser, value_indent))
-  let acc = value.ordered_insert(acc, key, val)
+  let acc = [#(key, val), ..acc]
   parse_explicit_mapping_items(parser, min_indent, acc, parse_value_fn)
 }
 
@@ -260,7 +261,7 @@ fn parse_explicit_mapping_items_at_indent(
         acc,
         parse_value_fn,
       )
-    _ -> Ok(#(value.Mapping(acc), parser))
+    _ -> Ok(#(value.Mapping(list.reverse(acc)), parser))
   }
 }
 
@@ -278,7 +279,7 @@ fn parse_after_explicit_key_at_indent(
     Some(lexer.Colon) -> {
       let parser = advance(parser) |> skip_spaces
       use #(val, parser) <- result.try(parse_value_fn(parser, n + 1))
-      let acc = value.ordered_insert(acc, key, val)
+      let acc = [#(key, val), ..acc]
       parse_explicit_mapping_items(parser, min_indent, acc, parse_value_fn)
     }
     Some(lexer.Indent(i)) -> {
@@ -287,17 +288,17 @@ fn parse_after_explicit_key_at_indent(
         Some(lexer.Colon) -> {
           let parser = advance(parser) |> skip_spaces
           use #(val, parser) <- result.try(parse_value_fn(parser, i + 1))
-          let acc = value.ordered_insert(acc, key, val)
+          let acc = [#(key, val), ..acc]
           parse_explicit_mapping_items(parser, min_indent, acc, parse_value_fn)
         }
         _ -> {
-          let acc = value.ordered_insert(acc, key, value.Null)
+          let acc = [#(key, value.Null), ..acc]
           parse_explicit_mapping_items(parser, min_indent, acc, parse_value_fn)
         }
       }
     }
     _ -> {
-      let acc = value.ordered_insert(acc, key, value.Null)
+      let acc = [#(key, value.Null), ..acc]
       parse_explicit_mapping_items(parser, min_indent, acc, parse_value_fn)
     }
   }
