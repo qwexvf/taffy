@@ -58,9 +58,12 @@ pub type Token {
 /// Lexer state.
 pub type Lexer {
   Lexer(
+    /// Original input string (kept for lookback in error/comment checks).
     input: String,
-    /// The remaining input from pos onwards (avoids re-slicing).
-    rest: String,
+    /// Full input as grapheme list (for back_up reconstruction).
+    input_chars: List(String),
+    /// Remaining characters from current position onwards.
+    chars: List(String),
     pos: Int,
     line: Int,
     col: Int,
@@ -73,9 +76,11 @@ pub type Lexer {
 
 /// Creates a new lexer.
 pub fn new(input: String) -> Lexer {
+  let chars = string.to_graphemes(input)
   Lexer(
     input: input,
-    rest: input,
+    input_chars: chars,
+    chars: chars,
     pos: 0,
     line: 1,
     col: 0,
@@ -93,7 +98,7 @@ fn list_to_string(chars: List(String)) -> String {
 /// Back up the lexer by one position.
 fn back_up(lexer: Lexer) -> Lexer {
   let new_pos = lexer.pos - 1
-  Lexer(..lexer, pos: new_pos, rest: string.drop_start(lexer.input, new_pos))
+  Lexer(..lexer, pos: new_pos, chars: list.drop(lexer.input_chars, new_pos))
 }
 
 /// Tokenizes the entire input.
@@ -331,23 +336,41 @@ fn lex_possible_directive(lexer: Lexer) -> Result(#(Token, Lexer), String) {
 }
 
 fn peek(lexer: Lexer) -> Option(String) {
-  case lexer.rest {
-    "" -> None
-    _ -> Some(string.slice(lexer.rest, 0, 1))
+  case lexer.chars {
+    [c, ..] -> Some(c)
+    [] -> None
   }
 }
 
 fn peek_n(lexer: Lexer, n: Int) -> String {
-  string.slice(lexer.rest, 0, n)
+  case n {
+    // Specialized fast path for n=3 (the only usage in this module)
+    3 ->
+      case lexer.chars {
+        [a, b, c, ..] -> a <> b <> c
+        [a, b] -> a <> b
+        [a] -> a
+        [] -> ""
+      }
+    _ -> take_n_string(lexer.chars, n, [])
+  }
+}
+
+/// Take n characters from a list and join them into a string.
+fn take_n_string(chars: List(String), n: Int, acc: List(String)) -> String {
+  case n, chars {
+    0, _ -> list.reverse(acc) |> string.join("")
+    _, [c, ..rest] -> take_n_string(rest, n - 1, [c, ..acc])
+    _, [] -> list.reverse(acc) |> string.join("")
+  }
 }
 
 fn advance(lexer: Lexer) -> Lexer {
-  Lexer(
-    ..lexer,
-    pos: lexer.pos + 1,
-    col: lexer.col + 1,
-    rest: string.drop_start(lexer.rest, 1),
-  )
+  case lexer.chars {
+    [_, ..rest] ->
+      Lexer(..lexer, pos: lexer.pos + 1, col: lexer.col + 1, chars: rest)
+    [] -> lexer
+  }
 }
 
 fn advance_n(lexer: Lexer, n: Int) -> Lexer {
@@ -355,7 +378,7 @@ fn advance_n(lexer: Lexer, n: Int) -> Lexer {
     ..lexer,
     pos: lexer.pos + n,
     col: lexer.col + n,
-    rest: string.drop_start(lexer.rest, n),
+    chars: list.drop(lexer.chars, n),
   )
 }
 
