@@ -5,14 +5,14 @@ import gleam/list
 import gleam/option.{Some}
 import gleam/result
 import gleam/string
-import yaml/lexer
-import yaml/parser/helpers.{
+import taffy/lexer
+import taffy/parser/helpers.{
   advance, current, flow_whitespace_has_comment, skip_flow_whitespace,
   skip_whitespace,
 }
-import yaml/parser/scalar.{parse_scalar, value_to_key_string}
-import yaml/parser/types.{type ParseError, type Parser, ParseError, Parser}
-import yaml/value.{type YamlValue}
+import taffy/parser/scalar.{parse_scalar, value_to_key_string}
+import taffy/parser/types.{type ParseError, type Parser, ParseError, Parser}
+import taffy/value.{type YamlValue}
 
 /// Parse a flow sequence.
 pub fn parse_flow_sequence(
@@ -123,7 +123,7 @@ fn parse_flow_sequence_entry(
       let parser = advance(parser) |> skip_whitespace
       // Check if this is a string tag with empty content
       let is_str_tag =
-        tag == "!!str" || string.contains(tag, "tag:yaml.org,2002:str")
+        tag == "!!str" || string.contains(tag, "tag:taffy.org,2002:str")
       case current(parser), is_str_tag {
         // String tag followed by comma, close bracket, or EOF = empty string
         Some(lexer.Comma), True
@@ -510,7 +510,7 @@ fn parse_tagged_flow_key(
 ) -> Result(#(String, Parser), ParseError) {
   let parser = advance(parser) |> skip_whitespace
   let is_str_tag =
-    tag == "!!str" || string.contains(tag, "tag:yaml.org,2002:str")
+    tag == "!!str" || string.contains(tag, "tag:taffy.org,2002:str")
   case current(parser), is_str_tag {
     Some(lexer.Colon), True -> Ok(#("", parser))
     _, _ -> parse_flow_key_with_colon(parser)
@@ -654,7 +654,7 @@ pub fn parse_flow_value(
     Some(lexer.Tag(tag)) -> {
       let parser = advance(parser) |> skip_whitespace
       let is_str_tag =
-        tag == "!!str" || string.contains(tag, "tag:yaml.org,2002:str")
+        tag == "!!str" || string.contains(tag, "tag:taffy.org,2002:str")
       case current(parser), is_str_tag {
         // String tag followed by separator = empty string
         Some(lexer.Comma), True

@@ -11,7 +11,7 @@
 //// ## Quick Start
 ////
 //// ```gleam
-//// import yaml
+//// import taffy
 ////
 //// pub fn main() {
 ////   let input = "
@@ -19,8 +19,8 @@
 //// age: 30
 //// active: true
 //// "
-////   let assert Ok(value) = yaml.parse(input)
-////   let assert Ok(name) = yaml.get(value, "name")
+////   let assert Ok(value) = taffy.parse(input)
+////   let assert Ok(name) = taffy.get(value, "name")
 //// }
 //// ```
 
@@ -30,10 +30,10 @@ import gleam/int
 import gleam/json.{type Json}
 import gleam/list
 import gleam/option.{type Option}
-import yaml/lexer
-import yaml/parser
-import yaml/parser/types.{type ParseError, ParseError}
-import yaml/value.{type YamlValue}
+import taffy/lexer
+import taffy/parser
+import taffy/parser/types.{type ParseError, ParseError}
+import taffy/value.{type YamlValue}
 
 // Re-export types
 pub type Value =
@@ -62,7 +62,7 @@ pub const mapping = value.Mapping
 /// ## Examples
 ///
 /// ```gleam
-/// let assert Ok(val) = yaml.parse("name: John")
+/// let assert Ok(val) = taffy.parse("name: John")
 /// ```
 pub fn parse(input: String) -> Result(Value, Error) {
   case lexer.tokenize(input) {

@@ -3,8 +3,8 @@
 import gleam/int
 import gleam/list
 import gleam/option.{type Option, None, Some}
-import yaml/lexer
-import yaml/parser/types.{type Parser, Parser}
+import taffy/lexer
+import taffy/parser/types.{type Parser, Parser}
 
 /// Get current token.
 pub fn current(parser: Parser) -> Option(lexer.Token) {

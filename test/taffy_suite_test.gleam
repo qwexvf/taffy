@@ -6,8 +6,8 @@ import gleam/result
 import gleam/string
 import gleeunit/should
 import simplifile
-import yaml
-import yaml/value
+import taffy
+import taffy/value
 
 /// Run tests from the YAML test suite
 pub fn yaml_test_suite_test() {
@@ -172,7 +172,7 @@ fn run_test_file(path: String) -> #(String, String) {
     Error(_) -> #("skip", path <> " (read error)")
     Ok(content) -> {
       // Parse the test file itself (it's YAML)
-      case yaml.parse(content) {
+      case taffy.parse(content) {
         Error(_) -> #("skip", path <> " (meta-parse error)")
         Ok(meta) -> run_test_cases(path, meta)
       }
@@ -180,9 +180,9 @@ fn run_test_file(path: String) -> #(String, String) {
   }
 }
 
-fn run_test_cases(path: String, meta: yaml.Value) -> #(String, String) {
+fn run_test_cases(path: String, meta: taffy.Value) -> #(String, String) {
   // The test file is a sequence of test cases
-  case yaml.as_list(meta) {
+  case taffy.as_list(meta) {
     None -> #("skip", path <> " (not a list)")
     Some(cases) -> {
       // Run first test case (usually just one per file)
@@ -194,23 +194,23 @@ fn run_test_cases(path: String, meta: yaml.Value) -> #(String, String) {
   }
 }
 
-fn run_single_test(path: String, test_case: yaml.Value) -> #(String, String) {
+fn run_single_test(path: String, test_case: taffy.Value) -> #(String, String) {
   let name =
-    yaml.get(test_case, "name")
-    |> result.map(yaml.to_string)
+    taffy.get(test_case, "name")
+    |> result.map(taffy.to_string)
     |> result.unwrap(path)
 
   // Check if this is an error test
-  let is_error_test = case yaml.get(test_case, "fail") {
+  let is_error_test = case taffy.get(test_case, "fail") {
     Ok(value.Bool(True)) -> True
     _ -> False
   }
 
   // Get the YAML input
-  case yaml.get(test_case, "yaml") {
+  case taffy.get(test_case, "yaml") {
     Error(_) -> #("skip", name <> " (no yaml field)")
     Ok(yaml_input) -> {
-      case yaml.as_string(yaml_input) {
+      case taffy.as_string(yaml_input) {
         None -> #("skip", name <> " (yaml not string)")
         Some(input) -> {
           // Normalize the input (replace special markers)
@@ -231,7 +231,7 @@ fn run_single_test(path: String, test_case: yaml.Value) -> #(String, String) {
           let input = string.replace(input, "∎", "")
 
           // Try to parse
-          case yaml.parse_all(input), is_error_test {
+          case taffy.parse_all(input), is_error_test {
             // Expected to fail and did fail
             Error(_), True -> #("pass", name)
             // Expected to fail but passed - check if any doc parsed
@@ -240,10 +240,10 @@ fn run_single_test(path: String, test_case: yaml.Value) -> #(String, String) {
             Error(e), False -> #("fail", name <> " (" <> e.message <> ")")
             // Expected to pass, check JSON output if available
             Ok(docs), False -> {
-              case yaml.get(test_case, "json") {
+              case taffy.get(test_case, "json") {
                 Error(_) -> #("pass", name)
                 Ok(expected_json) -> {
-                  case yaml.as_string(expected_json) {
+                  case taffy.as_string(expected_json) {
                     None -> #("pass", name)
                     Some(expected) -> {
                       // Build actual JSON: one JSON value per document, joined by newlines
@@ -251,7 +251,7 @@ fn run_single_test(path: String, test_case: yaml.Value) -> #(String, String) {
                         [] -> ""
                         _ ->
                           docs
-                          |> list.map(yaml.to_json_string)
+                          |> list.map(taffy.to_json_string)
                           |> string.join("\n")
                       }
                       case normalize_json(actual) == normalize_json(expected) {
