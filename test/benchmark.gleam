@@ -109,11 +109,8 @@ components:
         message:
           type: string"
 
-  // Large YAML — read from file if available
-  let large_yaml = case simplifile.read("examples/ometama.yaml") {
-    Ok(content) -> content
-    Error(_) -> string.repeat(medium_yaml <> "\n---\n", 5)
-  }
+  // Large YAML — repeat medium spec to simulate a large file
+  let large_yaml = string.repeat(medium_yaml <> "\n---\n", 10)
 
   io.println("--- Small YAML (5 keys, flat) ---")
   let small_result =

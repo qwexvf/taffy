@@ -1210,49 +1210,11 @@ fn parse_explicit_key(
       parse_explicit_key(parser, parse_value_fn)
     }
     // Newline - check for content on next line
-    Some(lexer.Newline) -> {
-      let after_newline = advance(parser)
-      case current(after_newline) {
-        Some(lexer.Dash) -> {
-          case parse_block_sequence(after_newline, 0, parse_value_fn) {
-            Ok(#(seq_val, parser)) -> Ok(#(value_to_string(seq_val), parser))
-            Error(e) -> Error(e)
-          }
-        }
-        Some(lexer.Indent(n)) -> {
-          let after_indent = advance(after_newline)
-          case current(after_indent) {
-            Some(lexer.Dash) -> {
-              let parser = Parser(..after_indent, pos: after_indent.pos - 1)
-              case parse_block_sequence(parser, n, parse_value_fn) {
-                Ok(#(seq_val, parser)) ->
-                  Ok(#(value_to_string(seq_val), parser))
-                Error(e) -> Error(e)
-              }
-            }
-            Some(lexer.Colon) -> Ok(#("", after_newline))
-            _ -> Ok(#("", after_newline))
-          }
-        }
-        Some(lexer.Colon) -> Ok(#("", after_newline))
-        _ -> Ok(#("", parser))
-      }
-    }
+    Some(lexer.Newline) ->
+      parse_explicit_key_after_newline(advance(parser), parser, parse_value_fn)
     // Indent - check for content
-    Some(lexer.Indent(n)) -> {
-      let after_indent = advance(parser)
-      case current(after_indent) {
-        Some(lexer.Dash) -> {
-          let parser = Parser(..after_indent, pos: after_indent.pos - 1)
-          case parse_block_sequence(parser, n, parse_value_fn) {
-            Ok(#(seq_val, parser)) -> Ok(#(value_to_string(seq_val), parser))
-            Error(e) -> Error(e)
-          }
-        }
-        Some(lexer.Colon) -> Ok(#("", parser))
-        _ -> Ok(#("", parser))
-      }
-    }
+    Some(lexer.Indent(n)) ->
+      parse_explicit_key_after_indent(parser, n, parse_value_fn)
     // Empty key
     Some(lexer.Colon) -> Ok(#("", parser))
     None | Some(lexer.Eof) -> Ok(#("", parser))
@@ -1261,5 +1223,71 @@ fn parse_explicit_key(
       parse_explicit_key(parser, parse_value_fn)
     }
     _ -> Ok(#("", parser))
+  }
+}
+
+/// Parse explicit key content after a newline.
+fn parse_explicit_key_after_newline(
+  after_newline: Parser,
+  original_parser: Parser,
+  parse_value_fn: ParseValueFn,
+) -> Result(#(String, Parser), ParseError) {
+  case current(after_newline) {
+    Some(lexer.Dash) ->
+      parse_sequence_as_explicit_key(after_newline, 0, parse_value_fn)
+    Some(lexer.Indent(n)) ->
+      parse_explicit_key_after_newline_indent(
+        after_newline,
+        n,
+        parse_value_fn,
+      )
+    Some(lexer.Colon) -> Ok(#("", after_newline))
+    _ -> Ok(#("", original_parser))
+  }
+}
+
+/// Parse explicit key content after a newline followed by indent.
+fn parse_explicit_key_after_newline_indent(
+  indent_parser: Parser,
+  n: Int,
+  parse_value_fn: ParseValueFn,
+) -> Result(#(String, Parser), ParseError) {
+  let after_indent = advance(indent_parser)
+  case current(after_indent) {
+    Some(lexer.Dash) -> {
+      let parser = Parser(..after_indent, pos: after_indent.pos - 1)
+      parse_sequence_as_explicit_key(parser, n, parse_value_fn)
+    }
+    Some(lexer.Colon) -> Ok(#("", indent_parser))
+    _ -> Ok(#("", indent_parser))
+  }
+}
+
+/// Parse explicit key content after an indent token.
+fn parse_explicit_key_after_indent(
+  parser: Parser,
+  n: Int,
+  parse_value_fn: ParseValueFn,
+) -> Result(#(String, Parser), ParseError) {
+  let after_indent = advance(parser)
+  case current(after_indent) {
+    Some(lexer.Dash) -> {
+      let backtracked = Parser(..after_indent, pos: after_indent.pos - 1)
+      parse_sequence_as_explicit_key(backtracked, n, parse_value_fn)
+    }
+    Some(lexer.Colon) -> Ok(#("", parser))
+    _ -> Ok(#("", parser))
+  }
+}
+
+/// Parse a block sequence and convert the result to a key string.
+fn parse_sequence_as_explicit_key(
+  parser: Parser,
+  min_indent: Int,
+  parse_value_fn: ParseValueFn,
+) -> Result(#(String, Parser), ParseError) {
+  case parse_block_sequence(parser, min_indent, parse_value_fn) {
+    Ok(#(seq_val, parser)) -> Ok(#(value_to_string(seq_val), parser))
+    Error(e) -> Error(e)
   }
 }
