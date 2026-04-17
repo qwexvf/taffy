@@ -585,30 +585,13 @@ fn parse_block_mapping_pairs_col(
       )
 
     Some(lexer.Alias(name)) if min_indent == 0 ->
-      parse_alias_key(
-        name,
-        advance(parser),
-        min_indent,
-        acc,
-        parse_value_fn,
-      )
+      parse_alias_key(name, advance(parser), min_indent, acc, parse_value_fn)
 
     Some(lexer.Anchor(name)) if min_indent == 0 ->
-      parse_anchored_key(
-        name,
-        advance(parser),
-        min_indent,
-        acc,
-        parse_value_fn,
-      )
+      parse_anchored_key(name, advance(parser), min_indent, acc, parse_value_fn)
 
     Some(lexer.Tag(_)) if min_indent == 0 ->
-      parse_tagged_key(
-        advance(parser),
-        min_indent,
-        acc,
-        parse_value_fn,
-      )
+      parse_tagged_key(advance(parser), min_indent, acc, parse_value_fn)
 
     _ -> done
   }
@@ -961,7 +944,13 @@ fn handle_explicit_key_value(
 
     _ -> {
       let acc = [#(key, value.Null), ..acc]
-      parse_block_mapping_pairs_col(parser, min_indent, None, acc, parse_value_fn)
+      parse_block_mapping_pairs_col(
+        parser,
+        min_indent,
+        None,
+        acc,
+        parse_value_fn,
+      )
     }
   }
 }
@@ -1023,7 +1012,13 @@ fn handle_indented_explicit_key_value(
 
     _ -> {
       let acc = [#(key, value.Null), ..acc]
-      parse_block_mapping_pairs_col(parser, min_indent, None, acc, parse_value_fn)
+      parse_block_mapping_pairs_col(
+        parser,
+        min_indent,
+        None,
+        acc,
+        parse_value_fn,
+      )
     }
   }
 }

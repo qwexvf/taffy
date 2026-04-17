@@ -114,10 +114,7 @@ pub fn next_token(lexer: Lexer) -> Result(#(Token, Lexer), String) {
     }
     Some("]") -> {
       let lexer = advance(lexer)
-      Ok(#(
-        BracketClose,
-        Lexer(..lexer, flow_level: lexer.flow_level - 1),
-      ))
+      Ok(#(BracketClose, Lexer(..lexer, flow_level: lexer.flow_level - 1)))
     }
     Some("{") -> {
       let lexer = advance(lexer)
@@ -125,10 +122,7 @@ pub fn next_token(lexer: Lexer) -> Result(#(Token, Lexer), String) {
     }
     Some("}") -> {
       let lexer = advance(lexer)
-      Ok(#(
-        BraceClose,
-        Lexer(..lexer, flow_level: lexer.flow_level - 1),
-      ))
+      Ok(#(BraceClose, Lexer(..lexer, flow_level: lexer.flow_level - 1)))
     }
     Some(",") -> Ok(#(Comma, advance(lexer)))
     Some("&") -> {
@@ -186,8 +180,7 @@ fn lex_colon(lexer: Lexer) -> Result(#(Token, Lexer), String) {
       Ok(#(Colon, lexer))
     Some(",") | Some("]") | Some("}") -> Ok(#(Colon, lexer))
     Some("\"") | Some("'") | Some("[") | Some("{") -> Ok(#(Colon, lexer))
-    _ ->
-      read_plain_scalar(back_up(lexer))
+    _ -> read_plain_scalar(back_up(lexer))
   }
 }
 
@@ -195,8 +188,7 @@ fn lex_question(lexer: Lexer) -> Result(#(Token, Lexer), String) {
   case peek(lexer) {
     Some(" ") | Some("\n") | Some("\r") | Some("\t") | None ->
       Ok(#(Question, lexer))
-    _ ->
-      read_plain_scalar(back_up(lexer))
+    _ -> read_plain_scalar(back_up(lexer))
   }
 }
 
@@ -212,8 +204,7 @@ fn lex_doc_start(lexer: Lexer) -> Result(#(Token, Lexer), String) {
   case peek(after_dashes) {
     Some(" ") | Some("\n") | Some("\r") | Some("\t") | None ->
       Ok(#(DocStart, Lexer(..after_dashes, in_document: True)))
-    _ ->
-      read_plain_scalar(lexer)
+    _ -> read_plain_scalar(lexer)
   }
 }
 
@@ -224,8 +215,7 @@ fn lex_dash_indicator(lexer: Lexer) -> Result(#(Token, Lexer), String) {
     Some(",") | Some("]") | Some("}") | Some("[") | Some("{")
       if lexer.flow_level > 0
     -> Error("Invalid use of dash indicator in flow context")
-    _ ->
-      read_plain_scalar(back_up(lexer))
+    _ -> read_plain_scalar(back_up(lexer))
   }
 }
 
@@ -496,8 +486,7 @@ fn read_single_quoted_loop(
     Some("\n") -> {
       let lexer = advance(lexer)
       case check_document_marker(lexer) {
-        True ->
-          Error("Unterminated single-quoted string")
+        True -> Error("Unterminated single-quoted string")
         False -> {
           let lexer = skip_quoted_continuation_whitespace(lexer)
           case peek(lexer) {
@@ -518,8 +507,7 @@ fn read_single_quoted_loop(
         _ -> lexer
       }
       case check_document_marker(lexer) {
-        True ->
-          Error("Unterminated single-quoted string")
+        True -> Error("Unterminated single-quoted string")
         False -> {
           let lexer = skip_quoted_continuation_whitespace(lexer)
           case peek(lexer) {
@@ -782,8 +770,7 @@ fn read_double_quoted_loop(
         Some("\n") -> {
           let next_lexer = advance(lexer)
           case check_document_marker(next_lexer) {
-            True ->
-              Error("Unterminated double-quoted string")
+            True -> Error("Unterminated double-quoted string")
             False -> skip_line_continuation(next_lexer, full_acc)
           }
         }
@@ -794,8 +781,7 @@ fn read_double_quoted_loop(
             _ -> lexer
           }
           case check_document_marker(next_lexer) {
-            True ->
-              Error("Unterminated double-quoted string")
+            True -> Error("Unterminated double-quoted string")
             False -> skip_line_continuation(next_lexer, full_acc)
           }
         }
@@ -805,10 +791,7 @@ fn read_double_quoted_loop(
     Some("\n") -> {
       let lexer = advance(lexer)
       case check_document_marker(lexer) {
-        True ->
-          Error(
-            "Unterminated double-quoted string",
-          )
+        True -> Error("Unterminated double-quoted string")
         False -> {
           let #(indent, lexer) = count_continuation_indent(lexer)
           case
@@ -835,10 +818,7 @@ fn read_double_quoted_loop(
         _ -> lexer
       }
       case check_document_marker(lexer) {
-        True ->
-          Error(
-            "Unterminated double-quoted string",
-          )
+        True -> Error("Unterminated double-quoted string")
         False -> {
           let #(indent, lexer) = count_continuation_indent(lexer)
           case
@@ -897,10 +877,7 @@ fn handle_double_quoted_fold(
     Some("\n") -> {
       let lexer = advance(lexer)
       case check_document_marker(lexer) {
-        True ->
-          Error(
-            "Unterminated double-quoted string",
-          )
+        True -> Error("Unterminated double-quoted string")
         False -> {
           let #(_indent, lexer) = count_continuation_indent(lexer)
           handle_double_quoted_fold(lexer, acc, newlines <> "\n")
@@ -914,10 +891,7 @@ fn handle_double_quoted_fold(
         _ -> lexer
       }
       case check_document_marker(lexer) {
-        True ->
-          Error(
-            "Unterminated double-quoted string",
-          )
+        True -> Error("Unterminated double-quoted string")
         False -> {
           let #(_indent, lexer) = count_continuation_indent(lexer)
           handle_double_quoted_fold(lexer, acc, newlines <> "\n")
@@ -1204,8 +1178,7 @@ fn read_block_header_loop(
           let lexer = skip_to_eol(lexer)
           Ok(#(header, lexer))
         }
-        False ->
-          Error("Invalid block scalar header")
+        False -> Error("Invalid block scalar header")
       }
     }
     Some("\n") | Some("\r") | None -> Ok(#(header, lexer))

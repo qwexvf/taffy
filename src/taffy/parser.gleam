@@ -131,9 +131,7 @@ fn extract_tag_handle(directive_content: String) -> String {
 
 fn validate_tag_handle(tag: String, parser: Parser) -> Result(Nil, ParseError) {
   case
-    string.starts_with(tag, "!<")
-    || tag == "!"
-    || string.starts_with(tag, "!!")
+    string.starts_with(tag, "!<") || tag == "!" || string.starts_with(tag, "!!")
   {
     True -> Ok(Nil)
     False -> {
@@ -381,10 +379,7 @@ pub fn parse_value(
         | Some(lexer.SingleQuoted(_))
         | Some(lexer.DoubleQuoted(_))
         | Some(lexer.Dash) ->
-          Error(ParseError(
-            "Invalid content after flow sequence",
-            parser.pos,
-          ))
+          Error(ParseError("Invalid content after flow sequence", parser.pos))
         _ -> Ok(#(seq_val, parser))
       }
     }

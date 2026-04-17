@@ -52,32 +52,11 @@ fn parse_explicit_mapping_items(
         parse_value_fn,
       )
     Some(lexer.Plain(s)) if min_indent == 0 ->
-      try_implicit_key(
-        s,
-        advance(parser),
-        min_indent,
-        1,
-        acc,
-        parse_value_fn,
-      )
+      try_implicit_key(s, advance(parser), min_indent, 1, acc, parse_value_fn)
     Some(lexer.SingleQuoted(s)) if min_indent == 0 ->
-      try_implicit_key(
-        s,
-        advance(parser),
-        min_indent,
-        1,
-        acc,
-        parse_value_fn,
-      )
+      try_implicit_key(s, advance(parser), min_indent, 1, acc, parse_value_fn)
     Some(lexer.DoubleQuoted(s)) if min_indent == 0 ->
-      try_implicit_key(
-        s,
-        advance(parser),
-        min_indent,
-        1,
-        acc,
-        parse_value_fn,
-      )
+      try_implicit_key(s, advance(parser), min_indent, 1, acc, parse_value_fn)
     Some(lexer.Colon) if min_indent == 0 ->
       parse_key_value_pair(
         "",
@@ -365,7 +344,9 @@ pub fn parse_explicit_key_value(
       Ok(#(value_to_key_string(seq_val), parser))
     }
     Some(lexer.BracketOpen) -> {
-      use #(val, parser) <- result.try(flow.parse_flow_sequence(advance(parser)))
+      use #(val, parser) <- result.try(
+        flow.parse_flow_sequence(advance(parser)),
+      )
       Ok(#(value_to_key_string(val), parser))
     }
     Some(lexer.BraceOpen) -> {
@@ -382,11 +363,7 @@ pub fn parse_explicit_key_value(
       }
     }
     Some(lexer.Tag(_)) ->
-      parse_explicit_key_value(
-        advance(parser),
-        min_indent,
-        parse_value_fn,
-      )
+      parse_explicit_key_value(advance(parser), min_indent, parse_value_fn)
     Some(lexer.Newline) ->
       parse_key_after_newline(advance(parser), min_indent, parse_value_fn)
     Some(lexer.Indent(n)) ->
@@ -410,11 +387,7 @@ fn parse_explicit_plain_key(
 ) -> Result(#(String, Parser), ParseError) {
   case current(parser) {
     Some(lexer.Colon) ->
-      parse_possible_inline_mapping(
-        advance(parser),
-        s,
-        min_indent,
-      )
+      parse_possible_inline_mapping(advance(parser), s, min_indent)
     _ -> {
       let #(full_key, parser) =
         collect_explicit_key_multiline(parser, s, min_indent)
