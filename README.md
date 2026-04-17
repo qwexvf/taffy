@@ -1,5 +1,7 @@
 # taffy
 
+> **Under development** — APIs may change, use main branch.
+
 A YAML 1.2 parser for Gleam with an optional native C NIF backend for high performance.
 
 ## Features
