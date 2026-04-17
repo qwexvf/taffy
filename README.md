@@ -22,8 +22,10 @@ A YAML 1.2 parser for Gleam with an optional native C NIF backend for high perfo
 
 ## Installation
 
-```sh
-gleam add taffy
+Add to your `gleam.toml`:
+
+```toml
+taffy = { git = "https://github.com/qwexvf/taffy", ref = "main" }
 ```
 
 For the native C NIF backend (optional, Erlang target only):
