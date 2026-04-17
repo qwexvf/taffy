@@ -14,7 +14,6 @@ import taffy/parser/scalar.{parse_scalar, value_to_key_string}
 import taffy/parser/types.{type ParseError, type Parser, ParseError, Parser}
 import taffy/value.{type YamlValue}
 
-/// Parse a flow sequence.
 pub fn parse_flow_sequence(
   parser: Parser,
 ) -> Result(#(YamlValue, Parser), ParseError) {
@@ -35,7 +34,6 @@ fn parse_flow_sequence_items(
     Some(lexer.Eof) | option.None ->
       Error(ParseError("Unterminated flow sequence", parser.pos))
 
-    // Leading comma or double comma is invalid
     Some(lexer.Comma) -> {
       case acc {
         [] ->
@@ -60,7 +58,6 @@ fn parse_flow_sequence_items(
   }
 }
 
-/// Continue parsing a flow sequence after parsing an entry.
 fn continue_flow_sequence(
   val: YamlValue,
   parser: Parser,
@@ -76,7 +73,6 @@ fn continue_flow_sequence(
   }
 }
 
-/// Parse a flow sequence entry, which might be a single-pair implicit mapping.
 fn parse_flow_sequence_entry(
   parser: Parser,
 ) -> Result(#(YamlValue, Parser), ParseError) {
@@ -121,18 +117,15 @@ fn parse_flow_sequence_entry(
 
     Some(lexer.Tag(tag)) -> {
       let parser = advance(parser) |> skip_whitespace
-      // Check if this is a string tag with empty content
       let is_str_tag =
         tag == "!!str" || string.contains(tag, "tag:taffy.org,2002:str")
       case current(parser), is_str_tag {
-        // String tag followed by comma, close bracket, or EOF = empty string
         Some(lexer.Comma), True
         | Some(lexer.BracketClose), True
         | Some(lexer.BraceClose), True
         | Some(lexer.Eof), True
         | option.None, True
         -> Ok(#(value.String(""), parser))
-        // Otherwise parse normally
         _, _ -> parse_flow_sequence_entry(parser)
       }
     }
@@ -149,7 +142,6 @@ fn parse_flow_sequence_entry(
   }
 }
 
-/// Check if a value is used as a mapping key (followed by colon).
 fn check_for_mapping_key(
   val: YamlValue,
   parser: Parser,
@@ -168,7 +160,6 @@ fn check_for_mapping_key(
   }
 }
 
-/// Check for adjacent colon pattern (no space between value and colon).
 fn check_adjacent_colon(
   key_val: YamlValue,
   plain: String,
@@ -177,28 +168,21 @@ fn check_adjacent_colon(
   case string.starts_with(plain, ":") {
     True -> {
       let key = value_to_key_string(key_val)
-      let val = parse_adjacent_value(string.drop_start(plain, 1))
+      let rest = string.drop_start(plain, 1)
+      let val = case rest {
+        "" -> value.Null
+        _ -> parse_scalar(rest)
+      }
       Ok(#(value.Mapping([#(key, val)]), advance(parser)))
     }
     False -> Ok(#(key_val, parser))
   }
 }
 
-/// Parse value from adjacent colon pattern.
-fn parse_adjacent_value(val_str: String) -> YamlValue {
-  case val_str {
-    "" -> value.Null
-    _ -> parse_scalar(val_str)
-  }
-}
-
-/// Check if a plain scalar is used as a mapping key.
-/// Only checks for colon on the same line (implicit keys can't span lines in flow).
 fn check_for_plain_mapping_key(
   full_scalar: String,
   parser: Parser,
 ) -> Result(#(YamlValue, Parser), ParseError) {
-  // Don't skip newlines - implicit keys must be on a single line
   case current(parser) {
     Some(lexer.Colon) -> {
       use parser <- result.try(skip_flow_whitespace(advance(parser)))
@@ -209,8 +193,6 @@ fn check_for_plain_mapping_key(
   }
 }
 
-/// Check if a quoted string is used as a mapping key.
-/// Only checks for colon on the same line (not after newline).
 fn check_for_quoted_mapping_key(
   s: String,
   parser: Parser,
@@ -224,20 +206,22 @@ fn check_for_quoted_mapping_key(
     Some(lexer.Plain(p)) -> {
       case string.starts_with(p, ":") {
         True -> {
-          let val = parse_adjacent_value(string.drop_start(p, 1))
+          let rest = string.drop_start(p, 1)
+          let val = case rest {
+            "" -> value.Null
+            _ -> parse_scalar(rest)
+          }
           Ok(#(value.Mapping([#(s, val)]), advance(parser)))
         }
         False -> Ok(#(value.String(s), parser))
       }
     }
-    // Skip past whitespace for non-mapping-key quoted strings
     Some(lexer.Newline) | Some(lexer.Indent(_)) ->
       Ok(#(value.String(s), parser))
     _ -> Ok(#(value.String(s), parser))
   }
 }
 
-/// Parse the value part of an explicit key-value pair.
 fn parse_explicit_key_value(
   key: String,
   parser: Parser,
@@ -253,7 +237,6 @@ fn parse_explicit_key_value(
   }
 }
 
-/// Parse a single-pair mapping in a flow sequence (after seeing ?).
 fn parse_flow_sequence_single_pair(
   parser: Parser,
   _saw_question: Bool,
@@ -274,14 +257,12 @@ fn parse_flow_sequence_single_pair(
       )
       Ok(#(value.Mapping([#("", val)]), parser))
     }
-    // No key or colon - empty mapping with empty key
     _ -> {
       Ok(#(value.Mapping([#("", value.Null)]), parser))
     }
   }
 }
 
-/// Parse a flow mapping.
 pub fn parse_flow_mapping(
   parser: Parser,
 ) -> Result(#(YamlValue, Parser), ParseError) {
@@ -312,7 +293,6 @@ fn parse_flow_mapping_pairs(
   }
 }
 
-/// Parse an explicit key-value pair in a flow mapping (after ?).
 fn parse_explicit_flow_mapping_pair(
   parser: Parser,
   acc: List(#(String, YamlValue)),
@@ -353,7 +333,6 @@ fn parse_explicit_flow_mapping_pair(
   }
 }
 
-/// Parse the value part of a flow mapping pair after seeing colon.
 fn parse_flow_mapping_colon_value(
   key: String,
   parser: Parser,
@@ -374,7 +353,6 @@ fn parse_flow_mapping_colon_value(
   }
 }
 
-/// Continue parsing flow mapping after parsing a value.
 fn continue_flow_mapping(
   key: String,
   val: YamlValue,
@@ -391,7 +369,6 @@ fn continue_flow_mapping(
   }
 }
 
-/// Parse a flow mapping value (handles regular colon and adjacent colon patterns).
 fn parse_flow_mapping_value(
   key: String,
   parser: Parser,
@@ -401,7 +378,11 @@ fn parse_flow_mapping_value(
     Some(lexer.Plain(s)) -> {
       case string.starts_with(s, ":") {
         True -> {
-          let val = parse_adjacent_value(string.drop_start(s, 1))
+          let rest = string.drop_start(s, 1)
+          let val = case rest {
+            "" -> value.Null
+            _ -> parse_scalar(rest)
+          }
           continue_flow_mapping(key, val, advance(parser), acc)
         }
         False -> Error(ParseError("Expected ':', ',' or '}'", parser.pos))
@@ -423,7 +404,6 @@ fn parse_flow_mapping_value(
   }
 }
 
-/// Parse a flow key that might contain colons (like URLs) or be complex (like [a,b]).
 pub fn parse_flow_key_with_colon(
   parser: Parser,
 ) -> Result(#(String, Parser), ParseError) {
@@ -443,7 +423,6 @@ pub fn parse_flow_key_with_colon(
   }
 }
 
-/// Parse a flow collection (sequence or mapping) as a mapping key.
 fn parse_flow_collection_key(
   parser: Parser,
   parse_fn: fn(Parser) -> Result(#(YamlValue, Parser), ParseError),
@@ -452,7 +431,6 @@ fn parse_flow_collection_key(
   Ok(#(value_to_key_string(val), parser))
 }
 
-/// Parse an anchored flow key — the anchor may precede a flow collection or plain key.
 fn parse_anchored_flow_key(
   parser: Parser,
   name: String,
@@ -481,7 +459,6 @@ fn parse_anchored_flow_key(
   }
 }
 
-/// Parse an alias reference as a flow mapping key.
 fn parse_alias_flow_key(
   parser: Parser,
   name: String,
@@ -493,7 +470,6 @@ fn parse_alias_flow_key(
   }
 }
 
-/// Parse a tagged flow mapping key.
 fn parse_tagged_flow_key(
   parser: Parser,
   tag: String,
@@ -507,57 +483,38 @@ fn parse_tagged_flow_key(
   }
 }
 
-/// Collect parts of a flow key that might span colons (like http://foo.com)
-/// or multiple lines (multiline plain scalars in flow context).
 fn collect_flow_key_parts(
   parser: Parser,
   acc: String,
 ) -> Result(#(String, Parser), ParseError) {
   case current(parser) {
-    // Colon that's part of the key (like in URLs)
     Some(lexer.Colon) -> {
-      // Look ahead to see if this colon is followed by something that
-      // indicates it's a mapping separator vs part of the key
       let after_colon = advance(parser)
       case current(after_colon) {
-        // Space after colon means this is a mapping separator
         Some(lexer.Indent(_)) -> Ok(#(string.trim_end(acc), parser))
-        // For flow context, we need to check if there's a space
-        // A colon directly followed by a value is a separator
         Some(lexer.Plain(_))
         | Some(lexer.SingleQuoted(_))
         | Some(lexer.DoubleQuoted(_))
         | Some(lexer.BracketOpen)
         | Some(lexer.BraceOpen) -> {
-          // This looks like a separator - stop here
-          Ok(#(string.trim_end(acc), parser))
-        }
-        // Otherwise, colon is part of the key
-        Some(lexer.Newline) | Some(lexer.Comma) | Some(lexer.BraceClose) -> {
           Ok(#(string.trim_end(acc), parser))
         }
         _ -> Ok(#(string.trim_end(acc), parser))
       }
     }
-    // Plain text continuation
     Some(lexer.Plain(s)) -> {
       let parser = advance(parser)
       collect_flow_key_parts(parser, acc <> s)
     }
-    // Multiline continuation: whitespace (newline/indent) followed by more plain text
-    // In flow context, newlines are folded to a single space
     Some(lexer.Indent(_)) | Some(lexer.Newline) -> {
-      // Validate flow indentation
       case skip_flow_whitespace(parser) {
         Error(_) -> Ok(#(string.trim_end(acc), parser))
         Ok(parser_after_ws) ->
           case current(parser_after_ws) {
             Some(lexer.Plain(s)) -> {
-              // Continue with a space between the parts
               let parser = advance(parser_after_ws)
               collect_flow_key_parts(parser, acc <> " " <> s)
             }
-            // If not followed by plain text, stop here
             _ -> Ok(#(string.trim_end(acc), parser))
           }
       }
@@ -566,41 +523,31 @@ fn collect_flow_key_parts(
   }
 }
 
-/// Collect parts of a plain scalar in a flow sequence that might span multiple lines.
-/// This is similar to collect_flow_key_parts but for values, not keys.
 fn collect_flow_plain_scalar_parts(
   parser: Parser,
   acc: String,
 ) -> #(String, Parser) {
   case current(parser) {
-    // Stop at flow indicators
     Some(lexer.Comma)
     | Some(lexer.BracketClose)
     | Some(lexer.BraceClose)
     | Some(lexer.Colon) -> #(string.trim_end(acc), parser)
-    // Plain text continuation on same line
     Some(lexer.Plain(s)) -> {
       let parser = advance(parser)
       collect_flow_plain_scalar_parts(parser, acc <> s)
     }
-    // Multiline continuation: whitespace (newline/indent) followed by more plain text
-    // In flow context, newlines are folded to a single space
     Some(lexer.Indent(_)) | Some(lexer.Newline) -> {
-      // Comments break scalar continuation in flow context
       case flow_whitespace_has_comment(parser) {
         True -> #(string.trim_end(acc), parser)
         False ->
-          // Validate flow indentation
           case skip_flow_whitespace(parser) {
             Error(_) -> #(string.trim_end(acc), parser)
             Ok(parser_after_ws) ->
               case current(parser_after_ws) {
                 Some(lexer.Plain(s)) -> {
-                  // Continue with a space between the parts
                   let parser = advance(parser_after_ws)
                   collect_flow_plain_scalar_parts(parser, acc <> " " <> s)
                 }
-                // If not followed by plain text, return parser BEFORE the newline
                 _ -> #(string.trim_end(acc), parser)
               }
           }
@@ -610,7 +557,6 @@ fn collect_flow_plain_scalar_parts(
   }
 }
 
-/// Parse a flow value.
 pub fn parse_flow_value(
   parser: Parser,
 ) -> Result(#(YamlValue, Parser), ParseError) {
@@ -636,13 +582,11 @@ pub fn parse_flow_value(
         Error(_) -> Error(ParseError("Unknown anchor: " <> name, parser.pos))
       }
     }
-    // Handle tags - check for string tag with empty value
     Some(lexer.Tag(tag)) -> {
       let parser = advance(parser) |> skip_whitespace
       let is_str_tag =
         tag == "!!str" || string.contains(tag, "tag:taffy.org,2002:str")
       case current(parser), is_str_tag {
-        // String tag followed by separator = empty string
         Some(lexer.Comma), True
         | Some(lexer.BraceClose), True
         | Some(lexer.BracketClose), True

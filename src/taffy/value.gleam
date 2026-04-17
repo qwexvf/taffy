@@ -7,32 +7,23 @@ import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/string
 
-/// A YAML value.
 pub type YamlValue {
-  /// Null value (null, ~, or empty)
   Null
-  /// Boolean value
   Bool(Bool)
-  /// Integer value
   Int(Int)
-  /// Floating point value
   Float(Float)
-  /// String value
   String(String)
-  /// Sequence (list/array)
   Sequence(List(YamlValue))
-  /// Mapping (dictionary/object) - preserves insertion order
   Mapping(List(#(String, YamlValue)))
 }
 
-/// Insert or update a key-value pair in an ordered mapping list.
-/// Preserves insertion order: new keys are appended, existing keys are updated in-place.
 pub fn ordered_insert(
   pairs: List(#(String, YamlValue)),
   key: String,
   val: YamlValue,
 ) -> List(#(String, YamlValue)) {
-  case has_key(pairs, key) {
+  let exists = list.any(pairs, fn(p) { p.0 == key })
+  case exists {
     True ->
       list.map(pairs, fn(p) {
         case p.0 == key {
@@ -44,25 +35,6 @@ pub fn ordered_insert(
   }
 }
 
-/// Prepend a key-value pair to an accumulator list (O(1)).
-/// Use list.reverse when the mapping is complete.
-pub fn prepend_pair(
-  pairs: List(#(String, YamlValue)),
-  key: String,
-  val: YamlValue,
-) -> List(#(String, YamlValue)) {
-  [#(key, val), ..pairs]
-}
-
-fn has_key(pairs: List(#(String, a)), key: String) -> Bool {
-  case pairs {
-    [] -> False
-    [#(k, _), ..] if k == key -> True
-    [_, ..rest] -> has_key(rest, key)
-  }
-}
-
-/// Converts a YamlValue to a string representation.
 pub fn to_string(value: YamlValue) -> String {
   case value {
     Null -> "null"
@@ -96,7 +68,6 @@ fn escape_string(s: String) -> String {
   |> string.replace("\t", "\\t")
 }
 
-/// Gets a value as a string.
 pub fn as_string(value: YamlValue) -> Option(String) {
   case value {
     String(s) -> Some(s)
@@ -104,7 +75,6 @@ pub fn as_string(value: YamlValue) -> Option(String) {
   }
 }
 
-/// Gets a value as an int.
 pub fn as_int(value: YamlValue) -> Option(Int) {
   case value {
     Int(i) -> Some(i)
@@ -112,7 +82,6 @@ pub fn as_int(value: YamlValue) -> Option(Int) {
   }
 }
 
-/// Gets a value as a float.
 pub fn as_float(value: YamlValue) -> Option(Float) {
   case value {
     Float(f) -> Some(f)
@@ -121,7 +90,6 @@ pub fn as_float(value: YamlValue) -> Option(Float) {
   }
 }
 
-/// Gets a value as a bool.
 pub fn as_bool(value: YamlValue) -> Option(Bool) {
   case value {
     Bool(b) -> Some(b)
@@ -129,7 +97,6 @@ pub fn as_bool(value: YamlValue) -> Option(Bool) {
   }
 }
 
-/// Gets a value as a list.
 pub fn as_list(value: YamlValue) -> Option(List(YamlValue)) {
   case value {
     Sequence(items) -> Some(items)
@@ -137,7 +104,6 @@ pub fn as_list(value: YamlValue) -> Option(List(YamlValue)) {
   }
 }
 
-/// Gets a value as a dict (converts from ordered list to dict).
 pub fn as_dict(value: YamlValue) -> Option(Dict(String, YamlValue)) {
   case value {
     Mapping(pairs) -> Some(dict.from_list(pairs))
@@ -145,7 +111,6 @@ pub fn as_dict(value: YamlValue) -> Option(Dict(String, YamlValue)) {
   }
 }
 
-/// Gets a value as an ordered list of key-value pairs.
 pub fn as_pairs(value: YamlValue) -> Option(List(#(String, YamlValue))) {
   case value {
     Mapping(pairs) -> Some(pairs)
@@ -153,7 +118,6 @@ pub fn as_pairs(value: YamlValue) -> Option(List(#(String, YamlValue))) {
   }
 }
 
-/// Gets a field from a mapping.
 pub fn get(value: YamlValue, key: String) -> Option(YamlValue) {
   case value {
     Mapping(pairs) -> list.key_find(pairs, key) |> option.from_result
@@ -161,24 +125,13 @@ pub fn get(value: YamlValue, key: String) -> Option(YamlValue) {
   }
 }
 
-/// Gets an index from a sequence.
 pub fn index(value: YamlValue, idx: Int) -> Option(YamlValue) {
   case value {
-    Sequence(items) -> list_at(items, idx)
+    Sequence(items) -> list.drop(items, idx) |> list.first |> option.from_result
     _ -> None
   }
 }
 
-fn list_at(items: List(a), idx: Int) -> Option(a) {
-  case items, idx {
-    [], _ -> None
-    [first, ..], 0 -> Some(first)
-    [_, ..rest], n if n > 0 -> list_at(rest, n - 1)
-    _, _ -> None
-  }
-}
-
-/// Checks if a value is null.
 pub fn is_null(value: YamlValue) -> Bool {
   case value {
     Null -> True

@@ -8,17 +8,15 @@ import taffy/lexer
 import taffy/parser/block
 import taffy/parser/flow
 import taffy/parser/helpers.{
-  advance, current, skip_newlines_and_comments, skip_spaces, token_to_string,
+  advance, current, skip_newlines_and_comments, token_to_string,
 }
-import taffy/parser/scalar.{value_to_key_string, value_to_string}
+import taffy/parser/scalar.{value_to_key_string}
 import taffy/parser/types.{type ParseError, type Parser, ParseError, Parser}
 import taffy/value.{type YamlValue}
 
-/// Type alias for parse_value function to avoid circular imports.
 pub type ParseValueFn =
   fn(Parser, Int) -> Result(#(YamlValue, Parser), ParseError)
 
-/// Parse an explicit mapping (using ? for keys).
 pub fn parse_explicit_mapping(
   parser: Parser,
   min_indent: Int,
@@ -37,7 +35,7 @@ fn parse_explicit_mapping_items(
 
   case current(parser) {
     Some(lexer.Question) -> {
-      let parser = advance(parser) |> skip_spaces
+      let parser = advance(parser)
       use #(key, parser) <- result.try(parse_explicit_key_value(
         parser,
         min_indent,
@@ -53,11 +51,10 @@ fn parse_explicit_mapping_items(
         acc,
         parse_value_fn,
       )
-    // Handle implicit keys at indent 0 (when min_indent == 0)
     Some(lexer.Plain(s)) if min_indent == 0 ->
       try_implicit_key(
         s,
-        advance(parser) |> skip_spaces,
+        advance(parser),
         min_indent,
         1,
         acc,
@@ -66,7 +63,7 @@ fn parse_explicit_mapping_items(
     Some(lexer.SingleQuoted(s)) if min_indent == 0 ->
       try_implicit_key(
         s,
-        advance(parser) |> skip_spaces,
+        advance(parser),
         min_indent,
         1,
         acc,
@@ -75,17 +72,16 @@ fn parse_explicit_mapping_items(
     Some(lexer.DoubleQuoted(s)) if min_indent == 0 ->
       try_implicit_key(
         s,
-        advance(parser) |> skip_spaces,
+        advance(parser),
         min_indent,
         1,
         acc,
         parse_value_fn,
       )
-    // Empty key entry (: value) at indent 0
     Some(lexer.Colon) if min_indent == 0 ->
       parse_key_value_pair(
         "",
-        advance(parser) |> skip_spaces,
+        advance(parser),
         min_indent,
         1,
         acc,
@@ -95,7 +91,6 @@ fn parse_explicit_mapping_items(
   }
 }
 
-/// After parsing an explicit key, look for the colon separator and value.
 fn parse_after_explicit_key(
   key: String,
   parser: Parser,
@@ -106,7 +101,7 @@ fn parse_after_explicit_key(
   let parser = skip_newlines_and_comments(parser)
   case current(parser) {
     Some(lexer.Colon) -> {
-      let parser = advance(parser) |> skip_spaces
+      let parser = advance(parser)
       use #(val, parser) <- result.try(parse_explicit_value(
         parser,
         min_indent,
@@ -124,7 +119,6 @@ fn parse_after_explicit_key(
         acc,
         parse_value_fn,
       )
-    // No colon, key maps to null — check for continuation
     Some(lexer.Question) -> {
       let acc = [#(key, value.Null), ..acc]
       parse_explicit_mapping_items(parser, min_indent, acc, parse_value_fn)
@@ -136,7 +130,6 @@ fn parse_after_explicit_key(
   }
 }
 
-/// Handle the Indent branch after an explicit key (looking for colon or next key).
 fn parse_after_explicit_key_indent(
   key: String,
   parser: Parser,
@@ -147,7 +140,7 @@ fn parse_after_explicit_key_indent(
 ) -> Result(#(YamlValue, Parser), ParseError) {
   case current(parser) {
     Some(lexer.Colon) -> {
-      let parser = advance(parser) |> skip_spaces
+      let parser = advance(parser)
       use #(val, parser) <- result.try(parse_value_fn(parser, n + 1))
       let acc = [#(key, val), ..acc]
       parse_explicit_mapping_items(parser, min_indent, acc, parse_value_fn)
@@ -164,11 +157,11 @@ fn parse_after_explicit_key_indent(
     }
     Some(lexer.Plain(s)) -> {
       let acc = [#(key, value.Null), ..acc]
-      parse_mixed_mapping_from_plain(
-        parser,
+      try_implicit_key(
         s,
+        advance(parser),
         min_indent,
-        n,
+        n + 1,
         acc,
         parse_value_fn,
       )
@@ -180,8 +173,6 @@ fn parse_after_explicit_key_indent(
   }
 }
 
-/// Try to parse an implicit key (scalar followed by colon).
-/// If no colon follows, the mapping ends.
 fn try_implicit_key(
   key: String,
   parser: Parser,
@@ -194,7 +185,7 @@ fn try_implicit_key(
     Some(lexer.Colon) ->
       parse_key_value_pair(
         key,
-        advance(parser) |> skip_spaces,
+        advance(parser),
         min_indent,
         value_indent,
         acc,
@@ -204,7 +195,6 @@ fn try_implicit_key(
   }
 }
 
-/// Parse a key-value pair where the key is known and colon has been consumed.
 fn parse_key_value_pair(
   key: String,
   parser: Parser,
@@ -228,7 +218,7 @@ fn parse_explicit_mapping_items_at_indent(
   let parser = advance(parser)
   case current(parser) {
     Some(lexer.Question) -> {
-      let parser = advance(parser) |> skip_spaces
+      let parser = advance(parser)
       use #(key, parser) <- result.try(parse_explicit_key_value(
         parser,
         n,
@@ -244,18 +234,18 @@ fn parse_explicit_mapping_items_at_indent(
       )
     }
     Some(lexer.Plain(s)) ->
-      parse_mixed_mapping_from_plain(
-        parser,
+      try_implicit_key(
         s,
+        advance(parser),
         min_indent,
-        n,
+        n + 1,
         acc,
         parse_value_fn,
       )
     Some(lexer.SingleQuoted(s)) | Some(lexer.DoubleQuoted(s)) ->
       try_implicit_key(
         s,
-        advance(parser) |> skip_spaces,
+        advance(parser),
         min_indent,
         n + 1,
         acc,
@@ -265,7 +255,6 @@ fn parse_explicit_mapping_items_at_indent(
   }
 }
 
-/// After parsing an explicit key at a specific indent, find the colon and value.
 fn parse_after_explicit_key_at_indent(
   key: String,
   parser: Parser,
@@ -277,7 +266,7 @@ fn parse_after_explicit_key_at_indent(
   let parser = skip_newlines_and_comments(parser)
   case current(parser) {
     Some(lexer.Colon) -> {
-      let parser = advance(parser) |> skip_spaces
+      let parser = advance(parser)
       use #(val, parser) <- result.try(parse_value_fn(parser, n + 1))
       let acc = [#(key, val), ..acc]
       parse_explicit_mapping_items(parser, min_indent, acc, parse_value_fn)
@@ -286,7 +275,7 @@ fn parse_after_explicit_key_at_indent(
       let parser = advance(parser)
       case current(parser) {
         Some(lexer.Colon) -> {
-          let parser = advance(parser) |> skip_spaces
+          let parser = advance(parser)
           use #(val, parser) <- result.try(parse_value_fn(parser, i + 1))
           let acc = [#(key, val), ..acc]
           parse_explicit_mapping_items(parser, min_indent, acc, parse_value_fn)
@@ -304,26 +293,6 @@ fn parse_after_explicit_key_at_indent(
   }
 }
 
-fn parse_mixed_mapping_from_plain(
-  parser: Parser,
-  s: String,
-  min_indent: Int,
-  n: Int,
-  acc: List(#(String, YamlValue)),
-  parse_value_fn: ParseValueFn,
-) -> Result(#(YamlValue, Parser), ParseError) {
-  try_implicit_key(
-    s,
-    advance(parser) |> skip_spaces,
-    min_indent,
-    n + 1,
-    acc,
-    parse_value_fn,
-  )
-}
-
-/// Collect multiline text for an explicit key.
-/// Stops at `:` (value separator), `?` (another key), or when indent decreases.
 fn collect_explicit_key_multiline(
   parser: Parser,
   acc: String,
@@ -336,10 +305,38 @@ fn collect_explicit_key_multiline(
         acc <> " " <> s,
         min_indent,
       )
-    Some(lexer.Newline) ->
-      collect_key_after_newline(advance(parser), acc, min_indent)
-    Some(lexer.Indent(n)) if n > min_indent ->
-      collect_key_after_indent(advance(parser), acc, min_indent)
+    Some(lexer.Newline) -> {
+      let after_newline = advance(parser)
+      case current(after_newline) {
+        Some(lexer.Indent(n)) if n > min_indent -> {
+          let after_indent = advance(after_newline)
+          case current(after_indent) {
+            Some(lexer.Colon) | Some(lexer.Question) -> #(acc, after_newline)
+            Some(lexer.Plain(s)) ->
+              collect_explicit_key_multiline(
+                advance(after_indent),
+                acc <> " " <> s,
+                min_indent,
+              )
+            _ -> #(acc, after_newline)
+          }
+        }
+        _ -> #(acc, parser)
+      }
+    }
+    Some(lexer.Indent(n)) if n > min_indent -> {
+      let after_indent = advance(parser)
+      case current(after_indent) {
+        Some(lexer.Colon) | Some(lexer.Question) -> #(acc, parser)
+        Some(lexer.Plain(s)) ->
+          collect_explicit_key_multiline(
+            advance(after_indent),
+            acc <> " " <> s,
+            min_indent,
+          )
+        _ -> #(acc, parser)
+      }
+    }
     Some(lexer.Colon) | Some(lexer.Question) | Some(lexer.Comment(_)) -> #(
       acc,
       parser,
@@ -348,38 +345,6 @@ fn collect_explicit_key_multiline(
   }
 }
 
-/// Continue collecting key text after a newline.
-fn collect_key_after_newline(
-  parser: Parser,
-  acc: String,
-  min_indent: Int,
-) -> #(String, Parser) {
-  case current(parser) {
-    Some(lexer.Indent(n)) if n > min_indent ->
-      collect_key_after_indent(advance(parser), acc, min_indent)
-    _ -> #(acc, parser)
-  }
-}
-
-/// Continue collecting key text after an indent token.
-fn collect_key_after_indent(
-  parser: Parser,
-  acc: String,
-  min_indent: Int,
-) -> #(String, Parser) {
-  case current(parser) {
-    Some(lexer.Colon) | Some(lexer.Question) -> #(acc, parser)
-    Some(lexer.Plain(s)) ->
-      collect_explicit_key_multiline(
-        advance(parser),
-        acc <> " " <> s,
-        min_indent,
-      )
-    _ -> #(acc, parser)
-  }
-}
-
-/// Parse an explicit key value.
 pub fn parse_explicit_key_value(
   parser: Parser,
   min_indent: Int,
@@ -391,18 +356,34 @@ pub fn parse_explicit_key_value(
     Some(lexer.SingleQuoted(s)) | Some(lexer.DoubleQuoted(s)) ->
       Ok(#(s, advance(parser)))
     Some(lexer.Literal(s)) | Some(lexer.Folded(s)) -> Ok(#(s, advance(parser)))
-    Some(lexer.Dash) ->
-      parse_sequence_as_key(parser, min_indent, parse_value_fn)
-    Some(lexer.BracketOpen) ->
-      parse_flow_collection_as_key(parser, flow.parse_flow_sequence)
-    Some(lexer.BraceOpen) ->
-      parse_flow_collection_as_key(parser, flow.parse_flow_mapping)
+    Some(lexer.Dash) -> {
+      use #(seq_val, parser) <- result.try(block.parse_block_sequence(
+        parser,
+        min_indent,
+        parse_value_fn,
+      ))
+      Ok(#(value_to_key_string(seq_val), parser))
+    }
+    Some(lexer.BracketOpen) -> {
+      use #(val, parser) <- result.try(flow.parse_flow_sequence(advance(parser)))
+      Ok(#(value_to_key_string(val), parser))
+    }
+    Some(lexer.BraceOpen) -> {
+      use #(val, parser) <- result.try(flow.parse_flow_mapping(advance(parser)))
+      Ok(#(value_to_key_string(val), parser))
+    }
     Some(lexer.Anchor(name)) ->
       parse_anchored_key(parser, name, min_indent, parse_value_fn)
-    Some(lexer.Alias(name)) -> parse_alias_as_key(parser, name)
+    Some(lexer.Alias(name)) -> {
+      let parser = advance(parser)
+      case dict.get(parser.anchors, name) {
+        Ok(val) -> Ok(#(value_to_key_string(val), parser))
+        Error(_) -> Error(ParseError("Unknown anchor: " <> name, parser.pos))
+      }
+    }
     Some(lexer.Tag(_)) ->
       parse_explicit_key_value(
-        advance(parser) |> skip_spaces,
+        advance(parser),
         min_indent,
         parse_value_fn,
       )
@@ -421,7 +402,6 @@ pub fn parse_explicit_key_value(
   }
 }
 
-/// Parse a plain scalar that might be an inline mapping key.
 fn parse_explicit_plain_key(
   parser: Parser,
   s: String,
@@ -431,7 +411,7 @@ fn parse_explicit_plain_key(
   case current(parser) {
     Some(lexer.Colon) ->
       parse_possible_inline_mapping(
-        advance(parser) |> skip_spaces,
+        advance(parser),
         s,
         min_indent,
       )
@@ -443,7 +423,6 @@ fn parse_explicit_plain_key(
   }
 }
 
-/// After seeing "key:" inside an explicit key, check if it's an inline mapping.
 fn parse_possible_inline_mapping(
   parser: Parser,
   key: String,
@@ -467,37 +446,13 @@ fn parse_possible_inline_mapping(
   }
 }
 
-/// Parse a block sequence and convert to a key string.
-fn parse_sequence_as_key(
-  parser: Parser,
-  min_indent: Int,
-  parse_value_fn: ParseValueFn,
-) -> Result(#(String, Parser), ParseError) {
-  use #(seq_val, parser) <- result.try(block.parse_block_sequence(
-    parser,
-    min_indent,
-    parse_value_fn,
-  ))
-  Ok(#(value_to_key_string(seq_val), parser))
-}
-
-/// Parse a flow collection (sequence or mapping) and convert to a key string.
-fn parse_flow_collection_as_key(
-  parser: Parser,
-  parse_fn: fn(Parser) -> Result(#(YamlValue, Parser), ParseError),
-) -> Result(#(String, Parser), ParseError) {
-  use #(val, parser) <- result.try(parse_fn(advance(parser)))
-  Ok(#(value_to_key_string(val), parser))
-}
-
-/// Parse an anchor followed by a key value.
 fn parse_anchored_key(
   parser: Parser,
   name: String,
   min_indent: Int,
   parse_value_fn: ParseValueFn,
 ) -> Result(#(String, Parser), ParseError) {
-  let parser = advance(parser) |> skip_spaces
+  let parser = advance(parser)
   use #(key, parser) <- result.try(parse_explicit_key_value(
     parser,
     min_indent,
@@ -511,26 +466,20 @@ fn parse_anchored_key(
   Ok(#(key, parser))
 }
 
-/// Parse an alias reference as a key.
-fn parse_alias_as_key(
-  parser: Parser,
-  name: String,
-) -> Result(#(String, Parser), ParseError) {
-  let parser = advance(parser)
-  case dict.get(parser.anchors, name) {
-    Ok(val) -> Ok(#(value_to_string(val), parser))
-    Error(_) -> Error(ParseError("Unknown anchor: " <> name, parser.pos))
-  }
-}
-
-/// After a newline in an explicit key, look for content on the next line.
 fn parse_key_after_newline(
   parser: Parser,
   min_indent: Int,
   parse_value_fn: ParseValueFn,
 ) -> Result(#(String, Parser), ParseError) {
   case current(parser) {
-    Some(lexer.Dash) -> parse_sequence_as_key(parser, 0, parse_value_fn)
+    Some(lexer.Dash) -> {
+      use #(seq_val, parser) <- result.try(block.parse_block_sequence(
+        parser,
+        0,
+        parse_value_fn,
+      ))
+      Ok(#(value_to_key_string(seq_val), parser))
+    }
     Some(lexer.Indent(n)) ->
       parse_key_after_indent_token(parser, n, min_indent, parse_value_fn)
     Some(lexer.Colon) -> Ok(#("", parser))
@@ -538,7 +487,6 @@ fn parse_key_after_newline(
   }
 }
 
-/// Parse key content after an Indent token.
 fn parse_key_after_indent_token(
   parser: Parser,
   n: Int,
@@ -549,15 +497,18 @@ fn parse_key_after_indent_token(
   case current(after_indent) {
     Some(lexer.Dash) -> {
       let parser = Parser(..after_indent, pos: after_indent.pos - 1)
-      parse_sequence_as_key(parser, n, parse_value_fn)
+      use #(seq_val, parser) <- result.try(block.parse_block_sequence(
+        parser,
+        n,
+        parse_value_fn,
+      ))
+      Ok(#(value_to_key_string(seq_val), parser))
     }
     Some(lexer.Colon) -> Ok(#("", parser))
     _ -> parse_explicit_key_value(after_indent, min_indent, parse_value_fn)
   }
 }
 
-/// Parse the value after : in an explicit mapping.
-/// Unlike regular mapping values, explicit mapping values can be at the same indent.
 fn parse_explicit_value(
   parser: Parser,
   min_indent: Int,
@@ -570,7 +521,6 @@ fn parse_explicit_value(
   }
 }
 
-/// Parse explicit value content after a newline.
 fn parse_explicit_value_after_newline(
   parser: Parser,
   parse_value_fn: ParseValueFn,

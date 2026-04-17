@@ -1,80 +1,50 @@
 //// YAML lexer - tokenizes YAML input.
 
-import gleam/int
 import gleam/list
 import gleam/option.{type Option, None, Some}
+import gleam/result
 import gleam/string
 
-/// Token types for YAML lexer.
 pub type Token {
-  /// Start of document ---
   DocStart
-  /// End of document ...
   DocEnd
-  /// Mapping key indicator :
   Colon
-  /// Explicit key indicator ?
   Question
-  /// Sequence entry indicator -
   Dash
-  /// Flow sequence start [
   BracketOpen
-  /// Flow sequence end ]
   BracketClose
-  /// Flow mapping start {
   BraceOpen
-  /// Flow mapping end }
   BraceClose
-  /// Item separator ,
   Comma
-  /// Anchor &name
   Anchor(String)
-  /// Alias *name
   Alias(String)
-  /// Tag !tag
   Tag(String)
-  /// Literal block scalar | with content
   Literal(String)
-  /// Folded block scalar > with content
   Folded(String)
-  /// Plain scalar (unquoted string)
   Plain(String)
-  /// Single-quoted string
   SingleQuoted(String)
-  /// Double-quoted string
   DoubleQuoted(String)
-  /// Comment
   Comment(String)
-  /// Newline (tracks for indentation)
   Newline
-  /// Indentation (number of spaces)
   Indent(Int)
-  /// YAML directive (%YAML, %TAG, etc.)
   Directive(String)
-  /// End of file
   Eof
 }
 
-/// Lexer state.
 pub type Lexer {
   Lexer(
-    /// Original input string (kept for lookback in error/comment checks).
     input: String,
-    /// Full input as grapheme list (for back_up reconstruction).
     input_chars: List(String),
-    /// Remaining characters from current position onwards.
     chars: List(String),
     pos: Int,
     line: Int,
     col: Int,
     in_document: Bool,
     flow_level: Int,
-    /// Column where the current quoted string opened (for indent validation).
     quoted_open_col: Int,
   )
 }
 
-/// Creates a new lexer.
 pub fn new(input: String) -> Lexer {
   let chars = string.to_graphemes(input)
   Lexer(
@@ -90,18 +60,15 @@ pub fn new(input: String) -> Lexer {
   )
 }
 
-/// Convert a reversed list of string fragments to a string (O(n)).
 fn list_to_string(chars: List(String)) -> String {
   chars |> list.reverse |> string.join("")
 }
 
-/// Back up the lexer by one position.
 fn back_up(lexer: Lexer) -> Lexer {
   let new_pos = lexer.pos - 1
   Lexer(..lexer, pos: new_pos, chars: list.drop(lexer.input_chars, new_pos))
 }
 
-/// Tokenizes the entire input.
 pub fn tokenize(input: String) -> Result(List(Token), String) {
   let lexer = new(input)
   case count_indent(lexer) {
@@ -123,34 +90,24 @@ fn tokenize_all(lexer: Lexer, acc: List(Token)) -> Result(List(Token), String) {
   }
 }
 
-/// Gets the next token.
 pub fn next_token(lexer: Lexer) -> Result(#(Token, Lexer), String) {
   case peek(lexer) {
     None -> Ok(#(Eof, lexer))
-    // Newline
     Some("\n") -> lex_after_newline(advance(lexer))
     Some("\r") -> {
       let lexer = advance(lexer)
-      // Handle \r\n
       let lexer = case peek(lexer) {
         Some("\n") -> advance(lexer)
         _ -> lexer
       }
       lex_after_newline(lexer)
     }
-    // Skip spaces (not at line start)
     Some(" ") | Some("\t") -> next_token(advance(lexer))
-    // Comment - must be preceded by whitespace or at start of line
     Some("#") -> lex_comment(lexer)
-    // Colon (check for mapping)
     Some(":") -> lex_colon(advance(lexer))
-    // Question mark (explicit key indicator)
     Some("?") -> lex_question(advance(lexer))
-    // Dash (check for sequence or document start)
     Some("-") -> lex_dash(lexer)
-    // Document end
     Some(".") -> lex_dot(lexer)
-    // Flow indicators
     Some("[") -> {
       let lexer = advance(lexer)
       Ok(#(BracketOpen, Lexer(..lexer, flow_level: lexer.flow_level + 1)))
@@ -159,7 +116,7 @@ pub fn next_token(lexer: Lexer) -> Result(#(Token, Lexer), String) {
       let lexer = advance(lexer)
       Ok(#(
         BracketClose,
-        Lexer(..lexer, flow_level: int.max(0, lexer.flow_level - 1)),
+        Lexer(..lexer, flow_level: lexer.flow_level - 1),
       ))
     }
     Some("{") -> {
@@ -170,39 +127,31 @@ pub fn next_token(lexer: Lexer) -> Result(#(Token, Lexer), String) {
       let lexer = advance(lexer)
       Ok(#(
         BraceClose,
-        Lexer(..lexer, flow_level: int.max(0, lexer.flow_level - 1)),
+        Lexer(..lexer, flow_level: lexer.flow_level - 1),
       ))
     }
     Some(",") -> Ok(#(Comma, advance(lexer)))
-    // Anchor
     Some("&") -> {
       let #(name, lexer) = read_identifier(advance(lexer))
       Ok(#(Anchor(name), lexer))
     }
-    // Alias
     Some("*") -> {
       let #(name, lexer) = read_identifier(advance(lexer))
       Ok(#(Alias(name), lexer))
     }
-    // Tag
     Some("!") -> {
       let #(tag, lexer) = read_tag(advance(lexer))
       Ok(#(Tag(tag), lexer))
     }
-    // Block scalars
     Some("|") -> read_literal_block(advance(lexer))
     Some(">") -> read_folded_block(advance(lexer))
-    // Quoted strings
     Some("'") -> read_single_quoted(advance(lexer))
     Some("\"") -> read_double_quoted(advance(lexer))
-    // Directive (only at start of line, followed by letter, and NOT inside a document)
     Some("%") -> lex_percent(lexer)
-    // Plain scalar
     Some(_) -> read_plain_scalar(lexer)
   }
 }
 
-/// After consuming a newline, count indent and produce Newline or Indent token.
 fn lex_after_newline(lexer: Lexer) -> Result(#(Token, Lexer), String) {
   case count_indent(lexer) {
     Error(e) -> Error(e)
@@ -211,7 +160,6 @@ fn lex_after_newline(lexer: Lexer) -> Result(#(Token, Lexer), String) {
   }
 }
 
-/// Lex a comment token (# must be preceded by whitespace or at start of line).
 fn lex_comment(lexer: Lexer) -> Result(#(Token, Lexer), String) {
   let valid = case lexer.pos > 0 {
     False -> True
@@ -228,38 +176,30 @@ fn lex_comment(lexer: Lexer) -> Result(#(Token, Lexer), String) {
       let #(text, lexer) = read_until_newline(advance(lexer))
       Ok(#(Comment(text), lexer))
     }
-    False -> Error("Invalid comment: '#' must be preceded by whitespace")
+    False -> Error("'#' must be preceded by whitespace")
   }
 }
 
-/// Lex a colon token (already advanced past the colon character).
 fn lex_colon(lexer: Lexer) -> Result(#(Token, Lexer), String) {
   case peek(lexer) {
-    // Always a mapping indicator if followed by whitespace or end
     Some(" ") | Some("\n") | Some("\r") | Some("\t") | None ->
       Ok(#(Colon, lexer))
-    // In flow context, colon before flow indicators is also a separator
     Some(",") | Some("]") | Some("}") -> Ok(#(Colon, lexer))
-    // After a quoted string, colon is typically a separator even if adjacent
     Some("\"") | Some("'") | Some("[") | Some("{") -> Ok(#(Colon, lexer))
     _ ->
-      // Part of a plain scalar
       read_plain_scalar(back_up(lexer))
   }
 }
 
-/// Lex a question mark token (already advanced past the ? character).
 fn lex_question(lexer: Lexer) -> Result(#(Token, Lexer), String) {
   case peek(lexer) {
     Some(" ") | Some("\n") | Some("\r") | Some("\t") | None ->
       Ok(#(Question, lexer))
     _ ->
-      // Part of a plain scalar
       read_plain_scalar(back_up(lexer))
   }
 }
 
-/// Lex a dash, which may be a sequence entry, document start, or plain scalar.
 fn lex_dash(lexer: Lexer) -> Result(#(Token, Lexer), String) {
   case peek_n(lexer, 3) {
     "---" -> lex_doc_start(lexer)
@@ -267,34 +207,28 @@ fn lex_dash(lexer: Lexer) -> Result(#(Token, Lexer), String) {
   }
 }
 
-/// Try to lex --- as a document start marker.
 fn lex_doc_start(lexer: Lexer) -> Result(#(Token, Lexer), String) {
   let after_dashes = advance_n(lexer, 3)
   case peek(after_dashes) {
     Some(" ") | Some("\n") | Some("\r") | Some("\t") | None ->
       Ok(#(DocStart, Lexer(..after_dashes, in_document: True)))
     _ ->
-      // Part of a plain scalar (like ---word)
       read_plain_scalar(lexer)
   }
 }
 
-/// Lex a dash that is not part of --- (already advanced past the dash).
 fn lex_dash_indicator(lexer: Lexer) -> Result(#(Token, Lexer), String) {
   case peek(lexer) {
     Some(" ") | Some("\n") | Some("\r") | Some("\t") | None ->
       Ok(#(Dash, lexer))
-    // In flow context, dash followed by flow indicator is invalid
     Some(",") | Some("]") | Some("}") | Some("[") | Some("{")
       if lexer.flow_level > 0
     -> Error("Invalid use of dash indicator in flow context")
     _ ->
-      // Part of a plain scalar (like negative number)
       read_plain_scalar(back_up(lexer))
   }
 }
 
-/// Lex a dot, which may be a document end marker or plain scalar.
 fn lex_dot(lexer: Lexer) -> Result(#(Token, Lexer), String) {
   case peek_n(lexer, 3) {
     "..." -> {
@@ -309,17 +243,13 @@ fn lex_dot(lexer: Lexer) -> Result(#(Token, Lexer), String) {
   }
 }
 
-/// Lex a percent sign, which may be a directive or plain scalar.
 fn lex_percent(lexer: Lexer) -> Result(#(Token, Lexer), String) {
   case lexer.col, lexer.in_document {
-    // At start of line and NOT inside a document - might be directive
     0, False -> lex_possible_directive(lexer)
-    // Inside document or not at start of line - treat as plain scalar
     _, _ -> read_plain_scalar(lexer)
   }
 }
 
-/// Check if % at column 0 outside a document is followed by a letter (directive).
 fn lex_possible_directive(lexer: Lexer) -> Result(#(Token, Lexer), String) {
   case peek(advance(lexer)) {
     Some(next) -> {
@@ -344,7 +274,6 @@ fn peek(lexer: Lexer) -> Option(String) {
 
 fn peek_n(lexer: Lexer, n: Int) -> String {
   case n {
-    // Specialized fast path for n=3 (the only usage in this module)
     3 ->
       case lexer.chars {
         [a, b, c, ..] -> a <> b <> c
@@ -356,7 +285,6 @@ fn peek_n(lexer: Lexer, n: Int) -> String {
   }
 }
 
-/// Take n characters from a list and join them into a string.
 fn take_n_string(chars: List(String), n: Int, acc: List(String)) -> String {
   case n, chars {
     0, _ -> list.reverse(acc) |> string.join("")
@@ -392,15 +320,12 @@ fn count_indent_loop(lexer: Lexer, count: Int) -> Result(#(Int, Lexer), String) 
     Some("\t") ->
       case count {
         0 -> check_tab_at_line_start(lexer)
-        // Tab after spaces - stop counting, tab is content/inline whitespace
         _ -> Ok(#(count, Lexer(..lexer, col: count)))
       }
     _ -> Ok(#(count, Lexer(..lexer, col: count)))
   }
 }
 
-/// Handle a tab character at the start of a line (no preceding spaces).
-/// Tabs are not allowed as indentation in YAML for block indicators and mapping keys.
 fn check_tab_at_line_start(lexer: Lexer) -> Result(#(Int, Lexer), String) {
   let after_tabs = skip_tabs_lexer(advance(lexer))
   case peek(after_tabs) {
@@ -415,7 +340,6 @@ fn check_tab_at_line_start(lexer: Lexer) -> Result(#(Int, Lexer), String) {
   }
 }
 
-/// Check if a dash after tab is a block indicator (error) or content like negative number (ok).
 fn check_tab_before_dash(
   after_tabs: Lexer,
   _original: Lexer,
@@ -433,7 +357,6 @@ fn check_tab_before_dash(
   }
 }
 
-/// Check if a block indicator (? etc.) after tab is an error.
 fn check_tab_before_indicator(
   after_tabs: Lexer,
 ) -> Result(#(Int, Lexer), String) {
@@ -453,27 +376,21 @@ fn skip_tabs_lexer(lexer: Lexer) -> Lexer {
   }
 }
 
-/// Check if content after tab looks like a mapping key (word followed by colon)
 fn has_mapping_indicator_after_tab(lexer: Lexer) -> Bool {
   case peek(lexer) {
     None | Some("\n") | Some("\r") -> False
     Some(":") -> {
-      // Colon at start - check if it's a mapping indicator
       case peek(advance(lexer)) {
         Some(" ") | Some("\t") | Some("\n") | Some("\r") | None -> True
         _ -> False
       }
     }
-    // Flow indicators - not a mapping key, tabs OK
     Some("[") | Some("]") | Some("{") | Some("}") -> False
-    // Quote characters - check if quoted string becomes a mapping key
     Some("'") | Some("\"") -> False
-    // Other content - scan forward to check for colon
     _ -> scan_for_mapping_colon(advance(lexer))
   }
 }
 
-/// Scan forward on the same line to check if this looks like a mapping key
 fn scan_for_mapping_colon(lexer: Lexer) -> Bool {
   case peek(lexer) {
     None | Some("\n") | Some("\r") -> False
@@ -505,10 +422,6 @@ fn read_identifier(lexer: Lexer) -> #(String, Lexer) {
 }
 
 fn read_identifier_loop(lexer: Lexer, acc: List(String)) -> #(String, Lexer) {
-  // YAML anchor/alias names can contain most characters except:
-  // - whitespace (space, tab, newline)
-  // - flow indicators: , [ ] { }
-  // NOTE: Colons ARE allowed in anchor names per YAML 1.2 spec
   case peek(lexer) {
     Some(" ")
     | Some("\t")
@@ -525,15 +438,12 @@ fn read_identifier_loop(lexer: Lexer, acc: List(String)) -> #(String, Lexer) {
 }
 
 fn read_tag(lexer: Lexer) -> #(String, Lexer) {
-  // Check if this is a verbatim tag (starts with <)
   case peek(lexer) {
     Some("<") -> read_verbatim_tag(advance(lexer), ["<", "!"])
     _ -> read_tag_loop(lexer, ["!"])
   }
 }
 
-/// Read a verbatim tag (enclosed in angle brackets).
-/// These can contain any characters until the closing >.
 fn read_verbatim_tag(lexer: Lexer, acc: List(String)) -> #(String, Lexer) {
   case peek(lexer) {
     Some(">") -> #(list_to_string([">", ..acc]), advance(lexer))
@@ -570,7 +480,6 @@ fn read_single_quoted_loop(
   case peek(lexer) {
     None -> Error("Unterminated single-quoted string")
     Some("'") -> {
-      // Check for escaped quote ''
       let lexer = advance(lexer)
       case peek(lexer) {
         Some("'") ->
@@ -584,26 +493,18 @@ fn read_single_quoted_loop(
         }
       }
     }
-    // Handle newline folding in single-quoted strings
     Some("\n") -> {
       let lexer = advance(lexer)
-      // Check for document markers at column 0
       case check_document_marker(lexer) {
         True ->
-          Error(
-            "Unterminated single-quoted string (document marker in quoted string)",
-          )
+          Error("Unterminated single-quoted string")
         False -> {
-          // Skip leading whitespace on continuation line
           let lexer = skip_quoted_continuation_whitespace(lexer)
-          // Check for empty lines (they become actual newlines)
           case peek(lexer) {
             Some("\n") -> {
-              // Empty line - preserve as newline
               read_single_quoted_loop(lexer, ["\n", ..acc], True)
             }
             _ -> {
-              // Single newline is folded to space
               read_single_quoted_loop(lexer, [" ", ..acc], True)
             }
           }
@@ -612,17 +513,13 @@ fn read_single_quoted_loop(
     }
     Some("\r") -> {
       let lexer = advance(lexer)
-      // Handle \r\n
       let lexer = case peek(lexer) {
         Some("\n") -> advance(lexer)
         _ -> lexer
       }
-      // Check for document markers at column 0
       case check_document_marker(lexer) {
         True ->
-          Error(
-            "Unterminated single-quoted string (document marker in quoted string)",
-          )
+          Error("Unterminated single-quoted string")
         False -> {
           let lexer = skip_quoted_continuation_whitespace(lexer)
           case peek(lexer) {
@@ -637,20 +534,16 @@ fn read_single_quoted_loop(
   }
 }
 
-/// Check if a multiline quoted string is being used as an implicit mapping key.
-/// If so, error in block context. In flow context, multiline keys are allowed.
 fn check_multiline_implicit_key(
   lexer: Lexer,
   token: Token,
 ) -> Result(#(Token, Lexer), String) {
-  // In flow context, multiline quoted keys are allowed
   case lexer.flow_level > 0 {
     True -> Ok(#(token, lexer))
     False -> check_multiline_block_key(lexer, token)
   }
 }
 
-/// In block context, check if a multiline quoted string precedes a mapping colon.
 fn check_multiline_block_key(
   lexer: Lexer,
   token: Token,
@@ -662,7 +555,6 @@ fn check_multiline_block_key(
   }
 }
 
-/// After seeing ":" following a multiline quoted string, check if it's a mapping indicator.
 fn check_colon_is_mapping_indicator(
   lexer: Lexer,
   token: Token,
@@ -685,7 +577,6 @@ fn skip_inline_spaces(lexer: Lexer) -> Lexer {
   }
 }
 
-/// Check if the current position starts with a document marker (--- or ...) at column 0.
 fn check_document_marker(lexer: Lexer) -> Bool {
   case peek_n(lexer, 3) {
     "---" | "..." -> {
@@ -707,8 +598,6 @@ fn skip_quoted_continuation_whitespace(lexer: Lexer) -> Lexer {
   }
 }
 
-/// Count leading spaces on a continuation line (for indent checking).
-/// Returns the indent level and the lexer positioned after the spaces.
 fn count_continuation_indent(lexer: Lexer) -> #(Int, Lexer) {
   count_continuation_indent_loop(lexer, 0)
 }
@@ -722,8 +611,6 @@ fn count_continuation_indent_loop(lexer: Lexer, count: Int) -> #(Int, Lexer) {
 }
 
 fn read_double_quoted(lexer: Lexer) -> Result(#(Token, Lexer), String) {
-  // pending_ws tracks literal whitespace that may be trimmed if newline follows
-  // Check if we're in a mapping value context (colon + space before the quote)
   let in_mapping_value = is_after_mapping_colon(lexer)
   let lexer =
     Lexer(..lexer, quoted_open_col: case in_mapping_value {
@@ -733,9 +620,6 @@ fn read_double_quoted(lexer: Lexer) -> Result(#(Token, Lexer), String) {
   read_double_quoted_loop(lexer, [], "", False)
 }
 
-/// Check if the current position is after a mapping colon (: followed by space).
-/// The lexer is positioned after the opening " was consumed.
-/// So pos-1 is the ", pos-2 is the space, pos-3 is the colon.
 fn is_after_mapping_colon(lexer: Lexer) -> Bool {
   case lexer.pos >= 3 {
     True -> {
@@ -747,8 +631,6 @@ fn is_after_mapping_colon(lexer: Lexer) -> Bool {
   }
 }
 
-/// Read double-quoted string with trailing whitespace handling.
-/// pending_ws tracks literal whitespace that gets trimmed if followed by newline.
 fn read_double_quoted_loop(
   lexer: Lexer,
   acc: List(String),
@@ -757,7 +639,6 @@ fn read_double_quoted_loop(
 ) -> Result(#(Token, Lexer), String) {
   case peek(lexer) {
     None -> Error("Unterminated double-quoted string")
-    // Include pending whitespace before closing quote
     Some("\"") -> {
       let s = case pending_ws {
         "" -> list_to_string(acc)
@@ -769,7 +650,6 @@ fn read_double_quoted_loop(
       }
     }
     Some("\\") -> {
-      // Escape sequences flush pending whitespace (they're not trailing)
       let full_acc = case pending_ws {
         "" -> acc
         _ -> [pending_ws, ..acc]
@@ -899,15 +779,11 @@ fn read_double_quoted_loop(
         Some("x") -> read_hex_escape(advance(lexer), full_acc, 2, multiline)
         Some("u") -> read_hex_escape(advance(lexer), full_acc, 4, multiline)
         Some("U") -> read_hex_escape(advance(lexer), full_acc, 8, multiline)
-        // Line continuation - skip newline and leading whitespace on next line
-        // Note: pending_ws is preserved (it's before the \, not trailing)
         Some("\n") -> {
           let next_lexer = advance(lexer)
           case check_document_marker(next_lexer) {
             True ->
-              Error(
-                "Unterminated double-quoted string (document marker in quoted string)",
-              )
+              Error("Unterminated double-quoted string")
             False -> skip_line_continuation(next_lexer, full_acc)
           }
         }
@@ -919,33 +795,27 @@ fn read_double_quoted_loop(
           }
           case check_document_marker(next_lexer) {
             True ->
-              Error(
-                "Unterminated double-quoted string (document marker in quoted string)",
-              )
+              Error("Unterminated double-quoted string")
             False -> skip_line_continuation(next_lexer, full_acc)
           }
         }
         Some(c) -> Error("Invalid escape sequence: \\" <> c)
       }
     }
-    // Handle unescaped newlines - fold to space, discard pending_ws (trailing whitespace)
     Some("\n") -> {
       let lexer = advance(lexer)
       case check_document_marker(lexer) {
         True ->
           Error(
-            "Unterminated double-quoted string (document marker in quoted string)",
+            "Unterminated double-quoted string",
           )
         False -> {
           let #(indent, lexer) = count_continuation_indent(lexer)
-          // In block context, continuation must be indented if string opened
-          // at a non-zero column (i.e., it's inside a mapping value)
           case
             lexer.flow_level == 0 && indent == 0 && lexer.quoted_open_col > 0
           {
             True ->
               case peek(lexer) {
-                // Blank line, closing quote, or EOF - OK
                 Some("\n") | Some("\r") | Some("\"") | None ->
                   handle_double_quoted_fold(lexer, acc, "")
                 _ ->
@@ -967,7 +837,7 @@ fn read_double_quoted_loop(
       case check_document_marker(lexer) {
         True ->
           Error(
-            "Unterminated double-quoted string (document marker in quoted string)",
+            "Unterminated double-quoted string",
           )
         False -> {
           let #(indent, lexer) = count_continuation_indent(lexer)
@@ -988,7 +858,6 @@ fn read_double_quoted_loop(
         }
       }
     }
-    // Literal whitespace - add to pending_ws instead of acc
     Some(" ") ->
       read_double_quoted_loop(advance(lexer), acc, pending_ws <> " ", multiline)
     Some("\t") ->
@@ -998,7 +867,6 @@ fn read_double_quoted_loop(
         pending_ws <> "\t",
         multiline,
       )
-    // Non-whitespace - flush pending_ws and add character
     Some(c) -> {
       let new_acc = case pending_ws {
         "" -> [c, ..acc]
@@ -1013,7 +881,6 @@ fn skip_line_continuation(
   lexer: Lexer,
   acc: List(String),
 ) -> Result(#(Token, Lexer), String) {
-  // Skip leading whitespace on the continuation line
   case peek(lexer) {
     Some(" ") -> skip_line_continuation(advance(lexer), acc)
     Some("\t") -> skip_line_continuation(advance(lexer), acc)
@@ -1021,21 +888,18 @@ fn skip_line_continuation(
   }
 }
 
-/// Handle line folding after skipping initial whitespace.
-/// Blank lines (just whitespace) become \n, otherwise fold to space.
 fn handle_double_quoted_fold(
   lexer: Lexer,
   acc: List(String),
   newlines: String,
 ) -> Result(#(Token, Lexer), String) {
   case peek(lexer) {
-    // Blank line - add newline and continue checking
     Some("\n") -> {
       let lexer = advance(lexer)
       case check_document_marker(lexer) {
         True ->
           Error(
-            "Unterminated double-quoted string (document marker in quoted string)",
+            "Unterminated double-quoted string",
           )
         False -> {
           let #(_indent, lexer) = count_continuation_indent(lexer)
@@ -1052,7 +916,7 @@ fn handle_double_quoted_fold(
       case check_document_marker(lexer) {
         True ->
           Error(
-            "Unterminated double-quoted string (document marker in quoted string)",
+            "Unterminated double-quoted string",
           )
         False -> {
           let #(_indent, lexer) = count_continuation_indent(lexer)
@@ -1060,7 +924,6 @@ fn handle_double_quoted_fold(
         }
       }
     }
-    // Content found - add accumulated newlines or fold to space
     _ -> {
       case newlines {
         "" -> read_double_quoted_loop(lexer, [" ", ..acc], "", True)
@@ -1076,14 +939,10 @@ fn read_hex_escape(
   digits: Int,
   multiline: Bool,
 ) -> Result(#(Token, Lexer), String) {
-  case read_hex_digits(lexer, [], digits) {
-    Error(e) -> Error(e)
-    Ok(#(hex_str, lexer)) ->
-      decode_hex_codepoint(lexer, acc, hex_str, multiline)
-  }
+  use #(hex_str, lexer) <- result.try(read_hex_digits(lexer, [], digits))
+  decode_hex_codepoint(lexer, acc, hex_str, multiline)
 }
 
-/// Decode a hex string into a unicode codepoint and continue parsing.
 fn decode_hex_codepoint(
   lexer: Lexer,
   acc: List(String),
@@ -1198,7 +1057,6 @@ fn read_plain_scalar_loop(
     Some(",") | Some("]") | Some("}") ->
       Ok(#(Plain(string.trim_end(list_to_string(acc))), lexer))
     Some("#") -> {
-      // Check if preceded by space or tab (comment)
       case acc {
         [" ", ..] | ["\t", ..] ->
           Ok(#(Plain(string.trim_end(list_to_string(acc))), lexer))
@@ -1206,7 +1064,6 @@ fn read_plain_scalar_loop(
       }
     }
     Some(":") -> {
-      // Check if followed by space/tab/newline (mapping indicator)
       let next_lexer = advance(lexer)
       case peek(next_lexer) {
         Some(" ") | Some("\t") | Some("\n") | Some("\r") | None ->
@@ -1218,9 +1075,7 @@ fn read_plain_scalar_loop(
   }
 }
 
-/// Read a literal block scalar (|)
 fn read_literal_block(lexer: Lexer) -> Result(#(Token, Lexer), String) {
-  // Skip chomping/indentation indicators and comments until newline
   case read_block_header(lexer) {
     Error(e) -> Error(e)
     Ok(#(header, lexer)) -> read_literal_block_content(header, lexer)
@@ -1231,10 +1086,8 @@ fn read_literal_block_content(
   header: BlockHeader,
   lexer: Lexer,
 ) -> Result(#(Token, Lexer), String) {
-  // Skip to end of header line
   let lexer = skip_to_eol(lexer)
 
-  // Skip the newline and read content
   case skip_newline(lexer) {
     Ok(lexer) ->
       read_literal_content(lexer, header.chomping, header.explicit_indent)
@@ -1242,9 +1095,7 @@ fn read_literal_block_content(
   }
 }
 
-/// Read a folded block scalar (>)
 fn read_folded_block(lexer: Lexer) -> Result(#(Token, Lexer), String) {
-  // Skip chomping/indentation indicators and comments until newline
   case read_block_header(lexer) {
     Error(e) -> Error(e)
     Ok(#(header, lexer)) -> {
@@ -1260,14 +1111,10 @@ fn read_folded_block(lexer: Lexer) -> Result(#(Token, Lexer), String) {
 
 type Chomping {
   Strip
-  // -
   Clip
-  // default
   Keep
-  // +
 }
 
-/// Block header result includes chomping indicator and optional explicit indent
 type BlockHeader {
   BlockHeader(chomping: Chomping, explicit_indent: Option(Int))
 }
@@ -1294,7 +1141,7 @@ fn read_block_header_loop(
         BlockHeader(..header, chomping: Keep),
         False,
       )
-    Some("0") -> Error("Block scalar indentation indicator must be 1-9, got 0")
+    Some("0") -> Error("Block scalar indent indicator cannot be 0")
     Some("1") ->
       read_block_header_loop(
         advance(lexer),
@@ -1358,7 +1205,7 @@ fn read_block_header_loop(
           Ok(#(header, lexer))
         }
         False ->
-          Error("Comment in block scalar header must be preceded by whitespace")
+          Error("Invalid block scalar header")
       }
     }
     Some("\n") | Some("\r") | None -> Ok(#(header, lexer))
@@ -1366,7 +1213,6 @@ fn read_block_header_loop(
   }
 }
 
-/// Skip a newline character (\n, \r, or \r\n). Returns Error(Nil) if not at a newline.
 fn skip_newline(lexer: Lexer) -> Result(Lexer, Nil) {
   case peek(lexer) {
     Some("\n") -> Ok(advance(lexer))
@@ -1395,20 +1241,13 @@ fn read_literal_content(
   chomping: Chomping,
   explicit_indent: Option(Int),
 ) -> Result(#(Token, Lexer), String) {
-  // Count leading empty lines before the first content line
   let #(leading_newlines, max_empty_indent, lexer) =
     count_leading_empty_lines(lexer, 0, 0)
-  // Always auto-detect indent from first non-empty line for block boundaries
   case find_block_indent(lexer) {
     Error(e) -> Error(e)
     Ok(NoContent(end_lexer)) -> {
-      // For empty block scalars, check if the "leading" empty lines were actually
-      // followed by content (even if at insufficient indent) or by true EOF
-      // If followed by content at indent 0 (block terminator), those lines aren't part of block
       let actual_trailing = case peek(end_lexer) {
-        // True EOF - the empty lines are trailing newlines for the block
         None -> leading_newlines
-        // Content at indent 0 - those empty lines aren't part of this block
         _ -> 0
       }
       let content = case chomping {
@@ -1419,12 +1258,9 @@ fn read_literal_content(
       Ok(#(Literal(content), lexer))
     }
     Ok(FoundContent(detected_indent, lexer)) -> {
-      // Leading empty lines must not have more spaces than the first content line
       case max_empty_indent > detected_indent && detected_indent > 0 {
         True -> Error("Leading empty line has too many spaces in block scalar")
         False -> {
-          // For extra space calculation, use explicit indent if provided
-          // This allows content to start with leading spaces preserved
           let #(boundary_indent, base_indent) = case explicit_indent {
             Some(n) -> {
               let boundary = find_min_block_indent(lexer, detected_indent, n)
@@ -1432,9 +1268,7 @@ fn read_literal_content(
             }
             None -> #(detected_indent, detected_indent)
           }
-          // Start with the leading empty lines
           let prefix = string.repeat("\n", leading_newlines)
-          // Use boundary_indent for block boundaries, base_indent for extra space calculation
           let #(content, lexer) =
             read_literal_lines_ex(lexer, boundary_indent, base_indent, prefix)
           let content = apply_chomping(content, chomping)
@@ -1450,7 +1284,6 @@ fn read_folded_content(
   chomping: Chomping,
   explicit_indent: Option(Int),
 ) -> Result(#(Token, Lexer), String) {
-  // Count leading empty lines first (before finding content)
   let #(leading_newlines, max_empty_indent, lexer) =
     count_leading_empty_lines(lexer, 0, 0)
   let prefix = string.repeat("\n", leading_newlines)
@@ -1467,16 +1300,11 @@ fn read_folded_content(
       Ok(#(Folded(content), lexer))
     }
     None -> {
-      // Auto-detect indent from first non-empty line
       case find_block_indent(lexer) {
         Error(e) -> Error(e)
         Ok(NoContent(end_lexer)) -> {
-          // For empty block scalars, check if the "leading" empty lines were actually
-          // followed by content (even if at insufficient indent) or by true EOF
           let actual_trailing = case peek(end_lexer) {
-            // True EOF - the empty lines are trailing newlines for the block
             None -> leading_newlines
-            // Content at indent 0 - those empty lines aren't part of this block
             _ -> 0
           }
           let content = case chomping {
@@ -1487,7 +1315,6 @@ fn read_folded_content(
           Ok(#(Folded(content), lexer))
         }
         Ok(FoundContent(block_indent, lexer)) -> {
-          // Leading empty lines must not have more spaces than first content line
           case max_empty_indent > block_indent && block_indent > 0 {
             True ->
               Error("Leading empty line has too many spaces in block scalar")
@@ -1504,17 +1331,13 @@ fn read_folded_content(
   }
 }
 
-/// Count leading empty lines (lines with only whitespace).
-/// Returns (count, max_indent_of_empty_lines, lexer).
 fn count_leading_empty_lines(
   lexer: Lexer,
   count: Int,
   max_indent: Int,
 ) -> #(Int, Int, Lexer) {
-  // Count leading spaces
   let #(indent, lexer_after_spaces) = count_leading_spaces(lexer, 0)
   case peek(lexer_after_spaces) {
-    // Empty line - count it and continue
     Some("\n") -> {
       let new_max = case indent > max_indent {
         True -> indent
@@ -1534,26 +1357,19 @@ fn count_leading_empty_lines(
         _ -> count_leading_empty_lines(lexer, count + 1, new_max)
       }
     }
-    // Not an empty line - done counting
     _ -> #(count, max_indent, lexer)
   }
 }
 
-/// Result of finding block indent: either content was found or not.
 type BlockIndentResult {
-  /// Content found at the given indent level
   FoundContent(indent: Int, lexer: Lexer)
-  /// No content found (end of input or empty)
   NoContent(lexer: Lexer)
 }
 
 fn find_block_indent(lexer: Lexer) -> Result(BlockIndentResult, String) {
-  // Save the start position of this line
   let line_start = lexer
-  // Count leading spaces
   let #(indent, lexer_after_spaces) = count_leading_spaces(lexer, 0)
   case peek(lexer_after_spaces) {
-    // Empty line - look at next line for indent
     Some("\n") -> find_block_indent(advance(lexer_after_spaces))
     Some("\r") -> {
       let lexer = advance(lexer_after_spaces)
@@ -1562,14 +1378,10 @@ fn find_block_indent(lexer: Lexer) -> Result(BlockIndentResult, String) {
         _ -> find_block_indent(lexer)
       }
     }
-    // Tab at start of indentation (no spaces before it) - not allowed
     Some("\t") if indent == 0 ->
       Error("Tabs are not allowed as indentation in YAML")
-    // Found content - check if it's valid block scalar content
     Some(_) -> {
       case indent {
-        // Content at indent 0: check if it looks like a new mapping key or document marker
-        // If so, the block scalar is empty
         0 -> {
           case is_block_terminator(lexer_after_spaces) {
             True -> Ok(NoContent(line_start))
@@ -1579,12 +1391,10 @@ fn find_block_indent(lexer: Lexer) -> Result(BlockIndentResult, String) {
         _ -> Ok(FoundContent(indent, line_start))
       }
     }
-    // End of input
     None -> Ok(NoContent(lexer_after_spaces))
   }
 }
 
-/// Check if current position starts with --- or ... followed by space/tab/newline/EOF.
 fn is_doc_marker(lexer: Lexer) -> Bool {
   case peek_n(lexer, 3) {
     "---" | "..." -> {
@@ -1598,26 +1408,19 @@ fn is_doc_marker(lexer: Lexer) -> Bool {
   }
 }
 
-/// Check if the content at this position terminates a block scalar.
-/// This includes mapping keys (word followed by colon) and document markers.
 fn is_block_terminator(lexer: Lexer) -> Bool {
-  // Check for document markers
   case peek_n(lexer, 3) {
     "---" | "..." -> True
     _ -> {
-      // Check if this line contains a colon followed by space/newline/end
-      // which would indicate a mapping key
       check_for_colon_in_line(lexer)
     }
   }
 }
 
-/// Scan the line for a colon that indicates a mapping key.
 fn check_for_colon_in_line(lexer: Lexer) -> Bool {
   case peek(lexer) {
     None | Some("\n") | Some("\r") -> False
     Some(":") -> {
-      // Check what follows the colon
       case peek(advance(lexer)) {
         None | Some(" ") | Some("\t") | Some("\n") | Some("\r") -> True
         _ -> check_for_colon_in_line(advance(lexer))
@@ -1634,7 +1437,6 @@ fn count_leading_spaces(lexer: Lexer, count: Int) -> #(Int, Lexer) {
   }
 }
 
-/// Find the minimum indent in the block content when explicit indent is given.
 fn find_min_block_indent(lexer: Lexer, current_min: Int, explicit: Int) -> Int {
   find_min_block_indent_loop(lexer, current_min, explicit)
 }
@@ -1646,7 +1448,6 @@ fn find_min_block_indent_loop(
 ) -> Int {
   let #(indent, after_spaces) = count_leading_spaces(lexer, 0)
   case peek(after_spaces) {
-    // Empty line - skip
     Some("\n") ->
       find_min_block_indent_loop(advance(after_spaces), current_min, explicit)
     Some("\r") -> {
@@ -1702,24 +1503,18 @@ fn skip_line_and_continue(lexer: Lexer, current_min: Int, explicit: Int) -> Int 
   }
 }
 
-/// Read literal lines with separate boundary and base indentation.
-/// boundary_indent: the auto-detected indent, used to determine when block ends
-/// base_indent: the explicit indent (or same as boundary), used for extra space calculation
 fn read_literal_lines_ex(
   lexer: Lexer,
   boundary_indent: Int,
   base_indent: Int,
   acc: String,
 ) -> #(String, Lexer) {
-  // Skip the block indent spaces, then read content
   let #(indent, after_spaces) = count_leading_spaces(lexer, 0)
-  // Include any extra indentation beyond base_indent (from explicit indicator)
   let extra_indent = case indent > base_indent {
     True -> string.repeat(" ", indent - base_indent)
     False -> ""
   }
   let #(line, lexer) = read_until_eol(after_spaces, extra_indent)
-  // Don't add extra newline if acc already ends with newline (from leading blank lines)
   let new_acc = case acc {
     "" -> line
     _ ->
@@ -1729,7 +1524,6 @@ fn read_literal_lines_ex(
       }
   }
 
-  // Check for newline and continuation
   case peek(lexer) {
     Some("\n") -> {
       let lexer = advance(lexer)
@@ -1763,22 +1557,16 @@ fn read_literal_lines_ex(
   }
 }
 
-/// Check literal continuation with separate boundary and base indentation.
-/// boundary_indent: used to determine when block ends
-/// base_indent: used for extra space calculation
 fn check_literal_continuation_ex(
   lexer: Lexer,
   boundary_indent: Int,
   base_indent: Int,
   acc: String,
 ) -> #(String, Lexer) {
-  // Count leading spaces on this line
   let #(indent, after_spaces) = count_leading_spaces(lexer, 0)
 
   case peek(after_spaces) {
-    // Line with only whitespace - check if extra indent should be content
     Some("\n") -> {
-      // If indent >= boundary_indent, include extra spaces as content
       let extra_content = case
         indent >= boundary_indent && indent > base_indent
       {
@@ -1794,7 +1582,6 @@ fn check_literal_continuation_ex(
     }
     Some("\r") -> {
       let lexer_after_cr = advance(after_spaces)
-      // If indent >= boundary_indent, include extra spaces as content
       let extra_content = case
         indent >= boundary_indent && indent > base_indent
       {
@@ -1820,17 +1607,14 @@ fn check_literal_continuation_ex(
     }
     None -> #(acc, lexer)
     Some(_) -> {
-      // Check if indent is sufficient (using boundary_indent)
       case indent >= boundary_indent {
         True -> {
-          // At indent 0, check for document markers which terminate the block
           case indent == 0 && is_doc_marker(after_spaces) {
             True -> {
               let backed_up = back_up(lexer)
               #(acc, backed_up)
             }
             False -> {
-              // Continue reading, include extra indentation (using base_indent)
               let extra_indent = case indent > base_indent {
                 True -> string.repeat(" ", indent - base_indent)
                 False -> ""
@@ -1870,8 +1654,6 @@ fn check_literal_continuation_ex(
           }
         }
         False -> {
-          // Block ends - back up to before the newline so it gets tokenized
-          // The lexer is at start of line (after newline was consumed), so back up by 1
           let backed_up = back_up(lexer)
           #(acc, backed_up)
         }
@@ -1880,28 +1662,21 @@ fn check_literal_continuation_ex(
   }
 }
 
-/// Tracks what caused the previous line break to be preserved
 type FoldState {
-  /// Normal state - line breaks fold to space
   FoldNormal
-  /// After a blank line - line break was preserved
   FoldAfterBlank
-  /// After a more-indented line - line break was preserved
   FoldAfterMoreIndented
 }
 
-/// Read folded block content.
 fn read_folded_lines(
   lexer: Lexer,
   block_indent: Int,
   acc: String,
   state: FoldState,
 ) -> #(String, Lexer) {
-  // Count leading spaces on this line
   let #(indent, after_spaces) = count_leading_spaces(lexer, 0)
 
   case peek(after_spaces) {
-    // Empty line - add a newline and mark that we came from blank
     Some("\n") -> {
       read_folded_lines(
         advance(after_spaces),
@@ -1943,7 +1718,6 @@ fn read_folded_lines(
             state,
           )
         False -> {
-          // Block ends - don't consume this line
           #(acc, lexer)
         }
       }
@@ -1958,16 +1732,11 @@ fn read_folded_lines_content(
   acc: String,
   state: FoldState,
 ) -> #(String, Lexer) {
-  // Check if this is a "more indented" line (indent > block_indent)
-  // Also treat lines starting with a tab as more-indented (for folding)
   let starts_with_tab = peek(after_spaces) == Some("\t")
   let is_more_indented = indent > block_indent || starts_with_tab
-  // Include extra indentation beyond block_indent
   let extra_indent = string.repeat(" ", indent - block_indent)
-  // Read content with extra indent preserved
   let #(line, lexer) = read_until_eol(after_spaces, extra_indent)
 
-  // Build the new accumulator
   let new_acc = case acc {
     "" -> line
     _ ->
@@ -1985,7 +1754,6 @@ fn read_folded_lines_content(
       }
   }
 
-  // Peek at next line to determine how to continue
   case peek(lexer) {
     Some("\n") -> {
       case is_more_indented {
@@ -2065,14 +1833,10 @@ fn apply_chomping(content: String, chomping: Chomping) -> String {
         _ -> trimmed <> "\n"
       }
     }
-    // Keep: add the final newline (content doesn't include trailing newlines)
-    // For content that's already just newlines (from NoContent case), add one more
     Keep -> content <> "\n"
   }
 }
 
-/// Trim only trailing newline characters (not all whitespace).
-/// This preserves trailing spaces on the last content line.
 fn trim_trailing_newlines(s: String) -> String {
   case string.last(s) {
     Ok("\n") | Ok("\r") -> trim_trailing_newlines(string.drop_end(s, 1))
