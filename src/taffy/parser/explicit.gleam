@@ -499,7 +499,8 @@ fn parse_explicit_value_after_newline(
 ) -> Result(#(YamlValue, Parser), ParseError) {
   case current(parser) {
     Some(lexer.Dash) ->
-      block.parse_block_sequence_at(parser, 0, None, parse_value_fn)
+      // Reached after a newline, so the dash is at start-of-line column 0.
+      block.parse_block_sequence_at(parser, 0, Some(0), parse_value_fn)
     Some(lexer.Indent(n)) -> {
       let after_indent = advance(parser)
       case current(after_indent) {

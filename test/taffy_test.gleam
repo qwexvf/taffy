@@ -405,19 +405,24 @@ pub fn parse_unclosed_flow_mapping_test() {
 }
 
 pub fn parse_misindented_top_level_dash_test() {
-  // Top-level sequence with an inconsistent dash column: the second dash
-  // is at column 1 while the first dash sits at column 0 holding a mapping.
-  // The sequence parser locks seq_col on the first dash and rejects the
-  // misindented sibling per YAML 1.2 §8.2.1 (this is the YAML test suite
-  // ZVH3 case). Pinned here so the fix doesn't regress if the test-suite
-  // submodule is ever rebaselined.
-  //
-  // Note: the looser form `- a\n - b` is still accepted because the
-  // multi-line plain-scalar accumulator absorbs the second line as a
-  // continuation. That's a separate issue at a different layer; documented
-  // rather than asserted to keep the test honest about what's actually
-  // checked here.
+  // Top-level sequence with a misindented sibling dash: the first dash sits
+  // at column 0 holding a mapping, the second at column 1. The sequence
+  // parser locks seq_col on the first dash and rejects the sibling per
+  // YAML 1.2 §8.2.1 (YAML test suite ZVH3). Pinned here so the fix survives
+  // a test-suite submodule rebaseline.
   taffy.parse("- key: value\n - item1\n") |> should.be_error
+}
+
+pub fn parse_misindented_dash_during_scalar_test() {
+  // Counter-test: a misindented dash *during* a still-active multi-line
+  // plain scalar is folded into the scalar (YAML 1.2 W4TN), not treated as
+  // a new sequence item. Pinned so the sequence-column fix doesn't
+  // accidentally tighten this path.
+  let assert Ok(val) = taffy.parse("- single multiline\n - sequence entry\n")
+  val
+  |> should.equal(
+    value.Sequence([value.String("single multiline - sequence entry")]),
+  )
 }
 
 pub fn parse_undefined_alias_test() {

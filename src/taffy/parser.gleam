@@ -293,11 +293,14 @@ fn parse_value(
     Some(lexer.BracketOpen) -> parse_flow_sequence_value(parser, min_indent)
     Some(lexer.BraceOpen) -> parse_flow_mapping_value(parser, min_indent)
     Some(lexer.Dash) -> {
-      // The dash arrived without a preceding Indent token. At top level
-      // (min_indent == 0) the parser is by definition at column 0 — every
-      // entry-point passes 0 from start-of-document. For inner recursive
-      // calls (min_indent > 0) the dash shares a line with its parent
-      // (e.g., `- - foo`) and the column is unknown.
+      // INVARIANT: every caller of `parse_value(parser, 0)` is positioned at
+      // column 0 (the entry points in `parse` and `parse_documents` start at
+      // doc-start, and `parse_indented_value` only reaches min_indent==0 via
+      // an outer Indent(0) which is itself column 0). New callers must
+      // preserve this — otherwise misindented top-level dashes would slip
+      // past `parse_block_sequence_at`'s column lock again. For min_indent>0
+      // the dash shares a line with its parent (e.g. `- - foo`) and the
+      // actual column is unknown, so we leave the lock unset.
       let dash_col = case min_indent {
         0 -> Some(0)
         _ -> None
@@ -638,6 +641,11 @@ fn should_absorb_dash_in_scalar(
   n: Int,
   min_indent: Int,
 ) -> Bool {
+  // YAML 1.2 W4TN: a misindented dash on a continuation line of a still-
+  // active plain scalar is folded into the scalar, not treated as a new
+  // sequence item. We only get here while collecting a plain scalar, so
+  // `n > entry_indent` is enough to confirm the dash isn't a sibling at
+  // the parent sequence's column.
   case seq_entry_indent {
     option.Some(entry_indent) -> n > entry_indent && n == min_indent
     option.None -> False
