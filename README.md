@@ -7,9 +7,11 @@ A YAML 1.2 parser for Gleam with an optional native C NIF backend for high perfo
 ## Features
 
 - **Pure Gleam** — works on Erlang and JavaScript targets, no FFI required
-- **Native backend** — optional C NIF via [fast_yaml](https://github.com/processone/fast_yaml) for 10-56x faster parsing
+- **Native backend** — optional C NIF via [fast_yaml](https://github.com/processone/fast_yaml) for ~3-7x faster parsing
 - **YAML 1.2 compliant** — passes 350/351 official YAML test suite cases
-- **JSON compatible** — convert parsed YAML to JSON with `to_json_string`
+  - The remaining case (`Wrong indented sequence item`) is currently lenient — taffy accepts an input the spec says should fail. One other case (`Mixed Block Mapping (implicit to explicit)`) parses correctly but emits keys in a different order from the reference output.
+- **Merge keys** — `<<: *anchor` and `<<: [*a, *b]` resolved automatically per YAML 1.1
+- **JSON + YAML output** — `to_json_string` and `to_yaml` for round-tripping
 
 ### Supported YAML Features
 
@@ -18,6 +20,7 @@ A YAML 1.2 parser for Gleam with an optional native C NIF backend for high perfo
 - Flow collections: `[a, b]` and `{key: value}`
 - Multi-line strings: `|` (literal) and `>` (folded)
 - Anchors and aliases: `&anchor` and `*alias`
+- Merge keys: `<<: *anchor` and `<<: [*a, *b]`
 - Comments, document markers (`---`, `...`), tag directives
 
 ## Installation
@@ -72,7 +75,6 @@ Same API, same `YamlValue` output — just faster. Requires `fast_yaml` in your 
 import taffy/native
 
 pub fn main() {
-  // 10-56x faster than pure Gleam, same result type
   let assert Ok(value) = native.parse("
 name: John
 age: 30
@@ -89,9 +91,9 @@ age: 30
 |---|---|---|
 | **Target** | Erlang + JavaScript | Erlang only |
 | **Dependencies** | None | `fast_yaml` (C NIF) |
-| **Speed (small)** | 17,725 ops/s | 88,835 ops/s |
-| **Speed (medium)** | 1,141 ops/s | 10,576 ops/s |
-| **Speed (large)** | 4.5 ops/s | 253 ops/s |
+| **Speed (small)** | ~10,000 ops/s | ~37,000 ops/s |
+| **Speed (medium)** | ~550 ops/s | ~3,700 ops/s |
+| **Speed (large)** | ~150 ops/s | ~385 ops/s |
 | **Use case** | JS target, simple configs | Large specs, performance-critical |
 
 ### Type accessors
@@ -108,7 +110,8 @@ case taffy.as_int(count) {
   None -> io.println("Not an integer")
 }
 
-// Available: as_string, as_int, as_float, as_bool, as_list, as_dict, is_null
+// Available: as_string, as_int, as_float, as_bool, as_list, as_dict,
+//            as_pairs (order-preserving), is_null
 ```
 
 ### Multiple documents
@@ -124,6 +127,44 @@ name: second
 ")
 // docs is List(YamlValue)
 ```
+
+### Merge keys
+
+```gleam
+let assert Ok(value) = taffy.parse("
+defaults: &d
+  retries: 3
+  timeout: 30
+prod:
+  <<: *d
+  timeout: 60
+")
+// prod is { retries: 3, timeout: 60 } — own keys win over merged
+```
+
+### Strict duplicate-key validation
+
+`parse` is lenient by default (the official YAML test suite expects parsers
+to accept duplicates). Apps that want YAML 1.2's spec-strict uniqueness can
+opt in:
+
+```gleam
+let assert Ok(val) = taffy.parse(input)
+case taffy.validate_unique_keys(val) {
+  Ok(_) -> ...
+  Error(key) -> // first duplicate key
+}
+```
+
+### Emitting YAML
+
+```gleam
+let yaml = taffy.to_yaml(value)
+// Block-style output, safe-quoted strings, ends with a trailing newline.
+```
+
+`to_yaml` round-trips through `parse` for any value that doesn't carry
+metadata taffy doesn't preserve (tags, anchors, comments).
 
 ## Development
 

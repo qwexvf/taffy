@@ -3,9 +3,13 @@ import gleam/option.{type Option, None}
 import taffy/lexer.{type Token}
 import taffy/value.{type YamlValue}
 
+/// `tokens` is the *remaining* token stream. `consumed` is the LIFO of tokens
+/// already advanced past (most-recent first), used by `helpers.backtrack` to
+/// rewind a single step in O(1) without reindexing.
 pub type Parser {
   Parser(
     tokens: List(Token),
+    consumed: List(Token),
     pos: Int,
     anchors: Dict(String, YamlValue),
     seq_entry_indent: Option(Int),
@@ -23,6 +27,7 @@ pub type ParseError {
 pub fn new(tokens: List(Token)) -> Parser {
   Parser(
     tokens: tokens,
+    consumed: [],
     pos: 0,
     anchors: dict.new(),
     seq_entry_indent: None,
@@ -31,4 +36,8 @@ pub fn new(tokens: List(Token)) -> Parser {
     flow_multiline: False,
     tag_handles: [],
   )
+}
+
+pub fn register_anchor(parser: Parser, name: String, val: YamlValue) -> Parser {
+  Parser(..parser, anchors: dict.insert(parser.anchors, name, val))
 }

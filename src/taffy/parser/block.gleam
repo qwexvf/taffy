@@ -18,11 +18,11 @@ pub fn parse_block_sequence(
   min_indent: Int,
   parse_value_fn: ParseValueFn,
 ) -> Result(#(YamlValue, Parser), ParseError) {
-  let sei = case min_indent {
+  let entry_indent = case min_indent {
     0 -> Some(0)
     _ -> None
   }
-  let parser = Parser(..parser, seq_entry_indent: sei)
+  let parser = Parser(..parser, seq_entry_indent: entry_indent)
   parse_block_sequence_items(parser, min_indent, [], parse_value_fn)
 }
 
@@ -239,7 +239,7 @@ fn parse_indented_mapping_value(
 ) -> Result(#(YamlValue, Parser), ParseError) {
   case current(parser) {
     Some(lexer.Dash) if indent_level >= key_indent -> {
-      let parser = Parser(..parser, pos: parser.pos - 1)
+      let parser = helpers.backtrack(parser)
       use #(val, parser) <- result.try(parse_block_sequence(
         parser,
         indent_level,
@@ -255,7 +255,7 @@ fn parse_indented_mapping_value(
         parse_value_fn,
       )
     _ -> {
-      let parser = Parser(..parser, pos: parser.pos - 1)
+      let parser = helpers.backtrack(parser)
       parse_value_with_anchor(parser, key_indent + 1, anchor, parse_value_fn)
     }
   }
@@ -408,8 +408,7 @@ fn parse_anchored_value_after_newline(
         0,
         parse_value_fn,
       ))
-      let parser =
-        Parser(..parser, anchors: dict.insert(parser.anchors, anchor_name, val))
+      let parser = types.register_anchor(parser, anchor_name, val)
       Ok(#(val, parser))
     }
 
@@ -423,11 +422,7 @@ fn parse_anchored_value_after_newline(
       )
 
     _ -> {
-      let parser =
-        Parser(
-          ..parser,
-          anchors: dict.insert(parser.anchors, anchor_name, value.Null),
-        )
+      let parser = types.register_anchor(parser, anchor_name, value.Null)
       Ok(#(value.Null, parser))
     }
   }
@@ -444,18 +439,17 @@ fn parse_anchored_indented_value(
     Some(lexer.Anchor(_)) ->
       Error(ParseError("A node can only have one anchor", parser.pos))
     Some(lexer.Dash) if indent_level >= key_indent -> {
-      let parser = Parser(..parser, pos: parser.pos - 1)
+      let parser = helpers.backtrack(parser)
       use #(val, parser) <- result.try(parse_block_sequence(
         parser,
         indent_level,
         parse_value_fn,
       ))
-      let parser =
-        Parser(..parser, anchors: dict.insert(parser.anchors, anchor_name, val))
+      let parser = types.register_anchor(parser, anchor_name, val)
       Ok(#(val, parser))
     }
     _ if indent_level > key_indent -> {
-      let parser = Parser(..parser, pos: parser.pos - 1)
+      let parser = helpers.backtrack(parser)
       parse_and_register_anchor(
         parser,
         key_indent + 1,
@@ -464,12 +458,8 @@ fn parse_anchored_indented_value(
       )
     }
     _ -> {
-      let parser = Parser(..parser, pos: parser.pos - 1)
-      let parser =
-        Parser(
-          ..parser,
-          anchors: dict.insert(parser.anchors, anchor_name, value.Null),
-        )
+      let parser = helpers.backtrack(parser)
+      let parser = types.register_anchor(parser, anchor_name, value.Null)
       Ok(#(value.Null, parser))
     }
   }
@@ -482,8 +472,7 @@ fn parse_and_register_anchor(
   parse_value_fn: ParseValueFn,
 ) -> Result(#(YamlValue, Parser), ParseError) {
   use #(val, parser) <- result.try(parse_value_fn(parser, min_indent))
-  let parser =
-    Parser(..parser, anchors: dict.insert(parser.anchors, anchor_name, val))
+  let parser = types.register_anchor(parser, anchor_name, val)
   Ok(#(val, parser))
 }
 
@@ -494,8 +483,7 @@ fn wrap_with_anchor(
 ) -> Result(#(YamlValue, Parser), ParseError) {
   case anchor {
     Some(name) -> {
-      let parser =
-        Parser(..parser, anchors: dict.insert(parser.anchors, name, val))
+      let parser = types.register_anchor(parser, name, val)
       Ok(#(val, parser))
     }
     None -> Ok(#(val, parser))
@@ -556,25 +544,11 @@ fn parse_block_mapping_pairs_col(
     Some(lexer.Question) if min_indent == 0 ->
       parse_explicit_key_in_mapping(parser, min_indent, 0, acc, parse_value_fn)
 
-    Some(lexer.Plain(s)) if min_indent == 0 ->
-      try_scalar_as_mapping_key(
-        s,
-        parser,
-        min_indent,
-        acc,
-        done,
-        parse_value_fn,
-      )
-    Some(lexer.SingleQuoted(s)) if min_indent == 0 ->
-      try_scalar_as_mapping_key(
-        s,
-        parser,
-        min_indent,
-        acc,
-        done,
-        parse_value_fn,
-      )
-    Some(lexer.DoubleQuoted(s)) if min_indent == 0 ->
+    Some(lexer.Plain(s))
+      | Some(lexer.SingleQuoted(s))
+      | Some(lexer.DoubleQuoted(s))
+      if min_indent == 0
+    ->
       try_scalar_as_mapping_key(
         s,
         parser,
@@ -749,14 +723,7 @@ fn parse_anchored_key(
                 parse_value_fn,
               ))
               let parser =
-                Parser(
-                  ..parser,
-                  anchors: dict.insert(
-                    parser.anchors,
-                    anchor_name,
-                    value.String(key),
-                  ),
-                )
+                types.register_anchor(parser, anchor_name, value.String(key))
               let acc = [#(key, val), ..acc]
               parse_block_mapping_pairs_col(
                 parser,
@@ -819,11 +786,7 @@ pub fn parse_mapping_key(
 
     Some(lexer.Anchor(name)) -> {
       use #(key, parser) <- result.try(parse_mapping_key(advance(parser)))
-      let parser =
-        Parser(
-          ..parser,
-          anchors: dict.insert(parser.anchors, name, value.String(key)),
-        )
+      let parser = types.register_anchor(parser, name, value.String(key))
       Ok(#(key, parser))
     }
 
@@ -1083,11 +1046,7 @@ fn parse_explicit_key(
         parser,
         parse_value_fn,
       ))
-      let parser =
-        Parser(
-          ..parser,
-          anchors: dict.insert(parser.anchors, name, value.String(key)),
-        )
+      let parser = types.register_anchor(parser, name, value.String(key))
       Ok(#(key, parser))
     }
     Some(lexer.Tag(_)) -> {
@@ -1131,7 +1090,7 @@ fn parse_explicit_key_after_newline_indent(
   let after_indent = advance(indent_parser)
   case current(after_indent) {
     Some(lexer.Dash) -> {
-      let parser = Parser(..after_indent, pos: after_indent.pos - 1)
+      let parser = helpers.backtrack(after_indent)
       parse_sequence_as_explicit_key(parser, n, parse_value_fn)
     }
     Some(lexer.Colon) -> Ok(#("", indent_parser))
@@ -1147,7 +1106,7 @@ fn parse_explicit_key_after_indent(
   let after_indent = advance(parser)
   case current(after_indent) {
     Some(lexer.Dash) -> {
-      let backtracked = Parser(..after_indent, pos: after_indent.pos - 1)
+      let backtracked = helpers.backtrack(after_indent)
       parse_sequence_as_explicit_key(backtracked, n, parse_value_fn)
     }
     Some(lexer.Colon) -> Ok(#("", parser))

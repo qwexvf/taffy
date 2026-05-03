@@ -10,11 +10,11 @@
 //// ```
 
 import gleam/dynamic.{type Dynamic}
-import gleam/float
-import gleam/int
 import gleam/list
-import gleam/option.{None, Some}
+import gleam/option.{type Option, None, Some}
+import gleam/result
 import gleam/string
+import taffy/parser/scalar
 import taffy/value.{type YamlValue}
 
 pub fn parse(input: String) -> Result(YamlValue, String) {
@@ -60,75 +60,59 @@ fn decode_documents(docs: Dynamic) -> List(YamlValue) {
 }
 
 fn convert_value(val: Dynamic) -> YamlValue {
-  case dynamic_to_int(val) |> option.from_result {
-    Some(i) -> value.Int(i)
-    None ->
-      case dynamic_to_float(val) |> option.from_result {
-        Some(f) -> value.Float(f)
-        None ->
-          case try_proplist(val) {
-            Some(pairs) -> value.Mapping(pairs)
-            None ->
-              case dynamic_to_list(val) |> option.from_result {
-                Some(items) -> value.Sequence(list.map(items, convert_value))
-                None ->
-                  case dynamic_to_string(val) |> option.from_result {
-                    Some(s) -> parse_scalar(s)
-                    None -> value.Null
-                  }
-              }
-          }
-      }
-  }
+  // Try decoders in priority order; first match wins, otherwise Null.
+  try_as_int(val)
+  |> option.lazy_or(fn() { try_as_float(val) })
+  |> option.lazy_or(fn() { try_as_mapping(val) })
+  |> option.lazy_or(fn() { try_as_sequence(val) })
+  |> option.lazy_or(fn() { try_as_string(val) })
+  |> option.unwrap(value.Null)
 }
 
-fn parse_scalar(s: String) -> YamlValue {
-  case s {
-    "true" | "True" | "TRUE" | "yes" | "Yes" | "YES" | "on" | "On" | "ON" ->
-      value.Bool(True)
-    "false" | "False" | "FALSE" | "no" | "No" | "NO" | "off" | "Off" | "OFF" ->
-      value.Bool(False)
-    "null" | "Null" | "NULL" | "~" | "" -> value.Null
-    _ -> {
-      case int.parse(s) {
-        Ok(i) -> value.Int(i)
-        Error(_) ->
-          case float.parse(s) {
-            Ok(f) -> value.Float(f)
-            Error(_) -> value.String(s)
-          }
-      }
-    }
-  }
+fn try_as_int(val: Dynamic) -> Option(YamlValue) {
+  dynamic_to_int(val) |> result.map(value.Int) |> option.from_result
 }
 
-fn try_proplist(val: Dynamic) -> option.Option(List(#(String, YamlValue))) {
-  case dynamic_to_list(val) {
-    Ok(items) -> {
+fn try_as_float(val: Dynamic) -> Option(YamlValue) {
+  dynamic_to_float(val) |> result.map(value.Float) |> option.from_result
+}
+
+fn try_as_mapping(val: Dynamic) -> Option(YamlValue) {
+  try_proplist(val) |> option.map(value.Mapping)
+}
+
+fn try_as_sequence(val: Dynamic) -> Option(YamlValue) {
+  dynamic_to_list(val)
+  |> result.map(fn(items) { value.Sequence(list.map(items, convert_value)) })
+  |> option.from_result
+}
+
+fn try_as_string(val: Dynamic) -> Option(YamlValue) {
+  dynamic_to_string(val)
+  |> result.map(scalar.parse_scalar)
+  |> option.from_result
+}
+
+fn try_proplist(val: Dynamic) -> Option(List(#(String, YamlValue))) {
+  use items <- option.then(dynamic_to_list(val) |> option.from_result)
+  case items {
+    // fast_yaml encodes `{}` and `[]` identically as `[]`, so an empty
+    // result is fundamentally ambiguous. Prefer Mapping since `{}` is the
+    // more common author intent; users wanting Sequence([]) for `[]` should
+    // use the pure parser.
+    [] -> Some([])
+    _ ->
       case list.all(items, is_tuple2) {
-        True -> {
-          let pairs =
-            list.filter_map(items, fn(item) {
-              case decode_tuple2(item) {
-                Ok(#(key, raw_val)) -> {
-                  case dynamic_to_string(key) |> option.from_result {
-                    Some(k) -> Ok(#(k, convert_value(raw_val)))
-                    None -> Error(Nil)
-                  }
-                }
-                Error(_) -> Error(Nil)
-              }
-            })
-          case pairs {
-            [] -> None
-            _ -> Some(pairs)
-          }
-        }
+        True -> Some(list.filter_map(items, decode_pair))
         False -> None
       }
-    }
-    Error(_) -> None
   }
+}
+
+fn decode_pair(item: Dynamic) -> Result(#(String, YamlValue), Nil) {
+  use #(key, raw_val) <- result.try(decode_tuple2(item))
+  use k <- result.try(dynamic_to_string(key))
+  Ok(#(k, convert_value(raw_val)))
 }
 
 @external(erlang, "native_ffi", "to_list")

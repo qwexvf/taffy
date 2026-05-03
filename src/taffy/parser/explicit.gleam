@@ -8,10 +8,10 @@ import taffy/lexer
 import taffy/parser/block
 import taffy/parser/flow
 import taffy/parser/helpers.{
-  advance, current, skip_newlines_and_comments, token_to_string,
+  advance, current, skip_newlines_and_comments, token_for_error,
 }
 import taffy/parser/scalar.{value_to_key_string}
-import taffy/parser/types.{type ParseError, type Parser, ParseError, Parser}
+import taffy/parser/types.{type ParseError, type Parser, ParseError}
 import taffy/value.{type YamlValue}
 
 pub type ParseValueFn =
@@ -51,12 +51,11 @@ fn parse_explicit_mapping_items(
         acc,
         parse_value_fn,
       )
-    Some(lexer.Plain(s)) if min_indent == 0 ->
-      try_implicit_key(s, advance(parser), min_indent, 1, acc, parse_value_fn)
-    Some(lexer.SingleQuoted(s)) if min_indent == 0 ->
-      try_implicit_key(s, advance(parser), min_indent, 1, acc, parse_value_fn)
-    Some(lexer.DoubleQuoted(s)) if min_indent == 0 ->
-      try_implicit_key(s, advance(parser), min_indent, 1, acc, parse_value_fn)
+    Some(lexer.Plain(s))
+      | Some(lexer.SingleQuoted(s))
+      | Some(lexer.DoubleQuoted(s))
+      if min_indent == 0
+    -> try_implicit_key(s, advance(parser), min_indent, 1, acc, parse_value_fn)
     Some(lexer.Colon) if min_indent == 0 ->
       parse_key_value_pair(
         "",
@@ -373,7 +372,7 @@ pub fn parse_explicit_key_value(
       parse_explicit_key_value(advance(parser), min_indent, parse_value_fn)
     Some(token) ->
       Error(ParseError(
-        "Expected explicit key value, got " <> token_to_string(token),
+        "Expected explicit key value, got " <> token_for_error(token),
         parser.pos,
       ))
   }
@@ -431,11 +430,7 @@ fn parse_anchored_key(
     min_indent,
     parse_value_fn,
   ))
-  let parser =
-    Parser(
-      ..parser,
-      anchors: dict.insert(parser.anchors, name, value.String(key)),
-    )
+  let parser = types.register_anchor(parser, name, value.String(key))
   Ok(#(key, parser))
 }
 
@@ -469,7 +464,7 @@ fn parse_key_after_indent_token(
   let after_indent = advance(parser)
   case current(after_indent) {
     Some(lexer.Dash) -> {
-      let parser = Parser(..after_indent, pos: after_indent.pos - 1)
+      let parser = helpers.backtrack(after_indent)
       use #(seq_val, parser) <- result.try(block.parse_block_sequence(
         parser,
         n,
@@ -504,11 +499,11 @@ fn parse_explicit_value_after_newline(
       let after_indent = advance(parser)
       case current(after_indent) {
         Some(lexer.Dash) -> {
-          let parser = Parser(..after_indent, pos: after_indent.pos - 1)
+          let parser = helpers.backtrack(after_indent)
           block.parse_block_sequence(parser, n, parse_value_fn)
         }
         _ -> {
-          let parser = Parser(..after_indent, pos: after_indent.pos - 1)
+          let parser = helpers.backtrack(after_indent)
           parse_value_fn(parser, n)
         }
       }

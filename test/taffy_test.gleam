@@ -1,3 +1,4 @@
+import gleam/dict
 import gleam/option.{None, Some}
 import gleeunit
 import gleeunit/should
@@ -222,8 +223,6 @@ name: John"
 // Anchor and alias tests
 
 pub fn parse_anchor_alias_test() {
-  // Note: This basic parser doesn't support merge keys (<<)
-  // but anchors/aliases for simple values should work
   let simple_input =
     "name: &myname John
 greeting: *myname"
@@ -294,20 +293,387 @@ pub fn as_bool_test() {
   taffy.as_bool(val) |> should.equal(None)
 }
 
+pub fn as_float_test() {
+  taffy.as_float(value.Float(3.14)) |> should.equal(Some(3.14))
+
+  // Int coerces to Float
+  taffy.as_float(value.Int(7)) |> should.equal(Some(7.0))
+
+  taffy.as_float(value.String("hello")) |> should.equal(None)
+  taffy.as_float(value.Null) |> should.equal(None)
+}
+
+pub fn as_list_test() {
+  let items = [value.Int(1), value.Int(2), value.Int(3)]
+  taffy.as_list(value.Sequence(items)) |> should.equal(Some(items))
+
+  taffy.as_list(value.Sequence([])) |> should.equal(Some([]))
+  taffy.as_list(value.String("hello")) |> should.equal(None)
+  taffy.as_list(value.Mapping([#("a", value.Int(1))])) |> should.equal(None)
+}
+
+pub fn as_pairs_test() {
+  let pairs = [#("b", value.Int(2)), #("a", value.Int(1))]
+  taffy.as_pairs(value.Mapping(pairs)) |> should.equal(Some(pairs))
+
+  taffy.as_pairs(value.Sequence([])) |> should.equal(None)
+  taffy.as_pairs(value.Null) |> should.equal(None)
+}
+
+pub fn as_dict_test() {
+  let pairs = [#("a", value.Int(1)), #("b", value.Int(2))]
+  let assert Some(d) = taffy.as_dict(value.Mapping(pairs))
+  d |> dict.size |> should.equal(2)
+  d |> dict.get("a") |> should.equal(Ok(value.Int(1)))
+  d |> dict.get("b") |> should.equal(Ok(value.Int(2)))
+
+  taffy.as_dict(value.Sequence([])) |> should.equal(None)
+  taffy.as_dict(value.Null) |> should.equal(None)
+}
+
 pub fn is_null_test() {
   taffy.is_null(value.Null) |> should.be_true
   taffy.is_null(value.String("hello")) |> should.be_false
+  taffy.is_null(value.Bool(False)) |> should.be_false
+  taffy.is_null(value.Int(0)) |> should.be_false
+}
+
+// Accessor edge cases
+
+pub fn get_or_test() {
+  let val = value.Mapping([#("name", value.String("John"))])
+
+  taffy.get_or(val, "name", value.Null) |> should.equal(value.String("John"))
+  taffy.get_or(val, "missing", value.Int(42)) |> should.equal(value.Int(42))
+
+  // get_or on non-mapping returns default
+  taffy.get_or(value.Int(5), "any", value.Null) |> should.equal(value.Null)
+}
+
+pub fn get_on_non_mapping_test() {
+  taffy.get(value.Int(5), "key") |> should.equal(Error(Nil))
+  taffy.get(value.String("hi"), "key") |> should.equal(Error(Nil))
+  taffy.get(value.Sequence([]), "key") |> should.equal(Error(Nil))
+  taffy.get(value.Null, "key") |> should.equal(Error(Nil))
+}
+
+pub fn get_missing_key_test() {
+  let val = value.Mapping([#("a", value.Int(1))])
+  taffy.get(val, "missing") |> should.equal(Error(Nil))
+}
+
+pub fn index_edge_cases_test() {
+  let seq = value.Sequence([value.Int(1), value.Int(2)])
+
+  // Out of range
+  taffy.index(seq, 2) |> should.equal(Error(Nil))
+  taffy.index(seq, 99) |> should.equal(Error(Nil))
+
+  // Non-sequence
+  taffy.index(value.Mapping([]), 0) |> should.equal(Error(Nil))
+  taffy.index(value.String("abc"), 0) |> should.equal(Error(Nil))
+  taffy.index(value.Null, 0) |> should.equal(Error(Nil))
+}
+
+pub fn get_path_edge_cases_test() {
+  let val =
+    value.Mapping([
+      #("a", value.Mapping([#("b", value.Int(1))])),
+    ])
+
+  // Empty path returns the value itself
+  taffy.get_path(val, []) |> should.equal(Ok(val))
+
+  // Missing intermediate key
+  taffy.get_path(val, ["missing", "b"]) |> should.equal(Error(Nil))
+
+  // Missing leaf
+  taffy.get_path(val, ["a", "missing"]) |> should.equal(Error(Nil))
+
+  // Path through non-mapping
+  taffy.get_path(value.Int(5), ["a"]) |> should.equal(Error(Nil))
+}
+
+// Error-path tests for parse / parse_all
+
+pub fn parse_unclosed_flow_sequence_test() {
+  taffy.parse("[1, 2") |> should.be_error
+}
+
+pub fn parse_unclosed_flow_mapping_test() {
+  taffy.parse("{a: 1") |> should.be_error
+}
+
+pub fn parse_undefined_alias_test() {
+  taffy.parse("*nope") |> should.be_error
+}
+
+pub fn parse_all_empty_test() {
+  let assert Ok(docs) = taffy.parse_all("")
+  docs |> should.equal([])
+}
+
+pub fn parse_all_multiple_documents_test() {
+  let input =
+    "---
+name: first
+---
+name: second
+---
+name: third"
+
+  let assert Ok(docs) = taffy.parse_all(input)
+  docs
+  |> should.equal([
+    value.Mapping([#("name", value.String("first"))]),
+    value.Mapping([#("name", value.String("second"))]),
+    value.Mapping([#("name", value.String("third"))]),
+  ])
+}
+
+// YAML emitter tests
+
+pub fn to_yaml_scalars_test() {
+  taffy.to_yaml(value.Null) |> should.equal("null\n")
+  taffy.to_yaml(value.Bool(True)) |> should.equal("true\n")
+  taffy.to_yaml(value.Int(42)) |> should.equal("42\n")
+  taffy.to_yaml(value.String("hello")) |> should.equal("hello\n")
+}
+
+pub fn to_yaml_quotes_ambiguous_strings_test() {
+  // Strings that would round-trip as a different scalar must be quoted.
+  taffy.to_yaml(value.String("true")) |> should.equal("\"true\"\n")
+  taffy.to_yaml(value.String("42")) |> should.equal("\"42\"\n")
+  taffy.to_yaml(value.String("null")) |> should.equal("\"null\"\n")
+  taffy.to_yaml(value.String("")) |> should.equal("\"\"\n")
+}
+
+pub fn to_yaml_quotes_special_chars_test() {
+  // Colon-space and hash-space need quoting to avoid being mis-parsed.
+  taffy.to_yaml(value.String("a: b")) |> should.equal("\"a: b\"\n")
+}
+
+pub fn to_yaml_block_mapping_test() {
+  let val =
+    value.Mapping([#("name", value.String("John")), #("age", value.Int(30))])
+  taffy.to_yaml(val) |> should.equal("name: John\nage: 30\n")
+}
+
+pub fn to_yaml_block_sequence_test() {
+  let val = value.Sequence([value.String("one"), value.String("two")])
+  taffy.to_yaml(val) |> should.equal("- one\n- two\n")
+}
+
+pub fn to_yaml_nested_test() {
+  let val =
+    value.Mapping([
+      #(
+        "person",
+        value.Mapping([
+          #("name", value.String("Alice")),
+          #("age", value.Int(25)),
+        ]),
+      ),
+    ])
+  taffy.to_yaml(val)
+  |> should.equal("person:\n  name: Alice\n  age: 25\n")
+}
+
+pub fn to_yaml_sequence_of_mappings_test() {
+  let val =
+    value.Sequence([
+      value.Mapping([#("name", value.String("Alice"))]),
+      value.Mapping([#("name", value.String("Bob"))]),
+    ])
+  taffy.to_yaml(val)
+  |> should.equal("- name: Alice\n- name: Bob\n")
+}
+
+pub fn to_yaml_round_trip_test() {
+  let input = "name: John\nage: 30\ntags:\n  - gleam\n  - erlang\n"
+  let assert Ok(val) = taffy.parse(input)
+  let emitted = taffy.to_yaml(val)
+  let assert Ok(round) = taffy.parse(emitted)
+  round |> should.equal(val)
+}
+
+pub fn to_yaml_empty_collections_test() {
+  taffy.to_yaml(value.Sequence([])) |> should.equal("[]\n")
+  taffy.to_yaml(value.Mapping([])) |> should.equal("{}\n")
+}
+
+// Strict duplicate-key validation
+
+pub fn validate_unique_keys_pass_test() {
+  let assert Ok(val) = taffy.parse("a: 1\nb: 2")
+  taffy.validate_unique_keys(val) |> should.be_ok
+}
+
+pub fn validate_unique_keys_fail_test() {
+  let assert Ok(val) = taffy.parse("a: 1\na: 2")
+  let assert Error(err) = taffy.validate_unique_keys(val)
+  err.message |> should.equal("Duplicate mapping key: a")
+}
+
+pub fn validate_unique_keys_nested_test() {
+  let assert Ok(val) = taffy.parse("outer:\n  k: 1\n  k: 2")
+  let assert Error(err) = taffy.validate_unique_keys(val)
+  err.message |> should.equal("Duplicate mapping key: k")
+}
+
+// Merge key tests
+
+pub fn parse_merge_key_single_test() {
+  let input =
+    "defaults: &d
+  a: 1
+  b: 2
+config:
+  <<: *d
+  c: 3"
+
+  let assert Ok(val) = taffy.parse(input)
+  taffy.get_path(val, ["config", "a"]) |> should.equal(Ok(value.Int(1)))
+  taffy.get_path(val, ["config", "b"]) |> should.equal(Ok(value.Int(2)))
+  taffy.get_path(val, ["config", "c"]) |> should.equal(Ok(value.Int(3)))
+  taffy.get_path(val, ["config", "<<"]) |> should.equal(Error(Nil))
+}
+
+pub fn parse_merge_key_overrides_test() {
+  // Own keys take precedence over merged keys.
+  let input =
+    "defaults: &d
+  a: 1
+  b: 2
+config:
+  <<: *d
+  a: 99"
+
+  let assert Ok(val) = taffy.parse(input)
+  taffy.get_path(val, ["config", "a"]) |> should.equal(Ok(value.Int(99)))
+  taffy.get_path(val, ["config", "b"]) |> should.equal(Ok(value.Int(2)))
+}
+
+pub fn parse_merge_key_sequence_test() {
+  // Multiple sources; earlier wins between them.
+  let input =
+    "first: &f
+  a: 1
+second: &s
+  a: 2
+  b: 2
+config:
+  <<: [*f, *s]"
+
+  let assert Ok(val) = taffy.parse(input)
+  taffy.get_path(val, ["config", "a"]) |> should.equal(Ok(value.Int(1)))
+  taffy.get_path(val, ["config", "b"]) |> should.equal(Ok(value.Int(2)))
+}
+
+// Tag directive tests
+
+pub fn parse_yaml_directive_test() {
+  // Directives only attach to documents, so we route through parse_all.
+  let input =
+    "%YAML 1.2
+---
+name: John"
+
+  let assert Ok([val]) = taffy.parse_all(input)
+  taffy.get(val, "name") |> should.equal(Ok(value.String("John")))
+}
+
+pub fn parse_tag_directive_test() {
+  let input =
+    "%TAG !e! tag:example.com,2000:app/
+---
+name: John"
+
+  let assert Ok([val]) = taffy.parse_all(input)
+  taffy.get(val, "name") |> should.equal(Ok(value.String("John")))
+}
+
+pub fn parse_declared_tag_handle_works_test() {
+  // After a %TAG directive declares !e!, an !e!suffix tag is recognised.
+  let input =
+    "%TAG !e! tag:example.com,2000:app/
+---
+greet: !e!hello world"
+
+  let assert Ok([val]) = taffy.parse_all(input)
+  taffy.get(val, "greet") |> should.equal(Ok(value.String("world")))
+}
+
+// Block scalar tests (literal | and folded >)
+
+pub fn parse_literal_block_scalar_test() {
+  let input =
+    "msg: |
+  line one
+  line two"
+
+  let assert Ok(val) = taffy.parse(input)
+  taffy.get(val, "msg")
+  |> should.equal(Ok(value.String("line one\nline two\n")))
+}
+
+pub fn parse_folded_block_scalar_test() {
+  let input =
+    "msg: >
+  line one
+  line two"
+
+  let assert Ok(val) = taffy.parse(input)
+  // Folded joins consecutive non-empty lines with a space.
+  taffy.get(val, "msg")
+  |> should.equal(Ok(value.String("line one line two\n")))
 }
 
 // JSON conversion tests
 
-pub fn to_json_string_test() {
+pub fn to_json_string_basic_test() {
   let val =
     value.Mapping([#("name", value.String("John")), #("age", value.Int(30))])
 
-  let json_str = taffy.to_json_string(val)
-  // Should be valid JSON
-  json_str |> should.not_equal("")
+  taffy.to_json_string(val)
+  |> should.equal("{\"name\":\"John\",\"age\":30}")
+}
+
+pub fn to_json_string_null_in_collection_test() {
+  let val =
+    value.Mapping([
+      #("a", value.Null),
+      #("b", value.Sequence([value.Null, value.Int(1)])),
+    ])
+
+  taffy.to_json_string(val)
+  |> should.equal("{\"a\":null,\"b\":[null,1]}")
+}
+
+pub fn to_json_string_float_as_int_test() {
+  // Whole-valued floats serialize as ints (preserves to_json branch).
+  taffy.to_json_string(value.Float(2.0))
+  |> should.equal("2")
+}
+
+pub fn to_json_string_float_test() {
+  // Non-whole floats serialize as floats.
+  taffy.to_json_string(value.Float(2.5))
+  |> should.equal("2.5")
+}
+
+pub fn to_json_string_empty_collections_test() {
+  taffy.to_json_string(value.Sequence([])) |> should.equal("[]")
+  taffy.to_json_string(value.Mapping([])) |> should.equal("{}")
+}
+
+pub fn to_json_string_round_trip_test() {
+  let input = "name: John\nage: 30\ntags:\n  - gleam\n  - erlang"
+  let assert Ok(val) = taffy.parse(input)
+  taffy.to_json_string(val)
+  |> should.equal(
+    "{\"name\":\"John\",\"age\":30,\"tags\":[\"gleam\",\"erlang\"]}",
+  )
 }
 
 // Complex document test

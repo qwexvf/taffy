@@ -69,16 +69,22 @@ fn back_up(lexer: Lexer) -> Lexer {
   Lexer(..lexer, pos: new_pos, chars: list.drop(lexer.input_chars, new_pos))
 }
 
-pub fn tokenize(input: String) -> Result(List(Token), String) {
+/// On error, the second element is the grapheme position at which the lexer
+/// gave up — surfaced through `ParseError.pos` so callers can pinpoint the
+/// failure rather than always reporting `pos: 0`.
+pub fn tokenize(input: String) -> Result(List(Token), #(String, Int)) {
   let lexer = new(input)
   case count_indent(lexer) {
-    Error(e) -> Error(e)
+    Error(e) -> Error(#(e, lexer.pos))
     Ok(#(0, lexer)) -> tokenize_all(lexer, [])
     Ok(#(n, lexer)) -> tokenize_all(lexer, [Indent(n)])
   }
 }
 
-fn tokenize_all(lexer: Lexer, acc: List(Token)) -> Result(List(Token), String) {
+fn tokenize_all(
+  lexer: Lexer,
+  acc: List(Token),
+) -> Result(List(Token), #(String, Int)) {
   case next_token(lexer) {
     Ok(#(token, new_lexer)) -> {
       case token {
@@ -86,7 +92,7 @@ fn tokenize_all(lexer: Lexer, acc: List(Token)) -> Result(List(Token), String) {
         _ -> tokenize_all(new_lexer, [token, ..acc])
       }
     }
-    Error(e) -> Error(e)
+    Error(e) -> Error(#(e, lexer.pos))
   }
 }
 

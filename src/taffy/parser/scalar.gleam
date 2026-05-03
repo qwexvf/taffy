@@ -3,6 +3,7 @@
 import gleam/float
 import gleam/int
 import gleam/list
+import gleam/result
 import gleam/string
 import taffy/value.{type YamlValue}
 
@@ -13,52 +14,50 @@ pub fn parse_scalar(s: String) -> YamlValue {
     "null" | "~" | "" -> value.Null
     "true" | "yes" | "on" -> value.Bool(True)
     "false" | "no" | "off" -> value.Bool(False)
-    _ -> {
-      case try_parse_hex(trimmed) {
-        Ok(i) -> value.Int(i)
+    _ -> parse_numeric_or_string(trimmed)
+  }
+}
+
+fn parse_numeric_or_string(s: String) -> YamlValue {
+  let int_result =
+    try_parse_hex(s)
+    |> result.lazy_or(fn() { try_parse_octal(s) })
+    |> result.lazy_or(fn() { int.parse(s) })
+
+  case int_result {
+    Ok(i) -> value.Int(i)
+    Error(_) ->
+      case float.parse(s) {
+        Ok(f) -> value.Float(f)
         Error(_) ->
-          case try_parse_octal(trimmed) {
-            Ok(i) -> value.Int(i)
-            Error(_) ->
-              case int.parse(trimmed) {
-                Ok(i) -> value.Int(i)
-                Error(_) -> {
-                  case float.parse(trimmed) {
-                    Ok(f) -> value.Float(f)
-                    Error(_) -> {
-                      case trimmed {
-                        ".inf" | ".Inf" | ".INF" -> value.Float(1.0 /. 0.0)
-                        "-.inf" | "-.Inf" | "-.INF" -> value.Float(-1.0 /. 0.0)
-                        ".nan" | ".NaN" | ".NAN" -> value.Float(0.0 /. 0.0)
-                        _ -> value.String(trimmed)
-                      }
-                    }
-                  }
-                }
-              }
+          case parse_special_float(s) {
+            Ok(f) -> value.Float(f)
+            Error(_) -> value.String(s)
           }
       }
-    }
   }
 }
 
 fn try_parse_hex(s: String) -> Result(Int, Nil) {
   case string.starts_with(string.lowercase(s), "0x") {
-    True -> {
-      let hex_part = string.drop_start(s, 2)
-      int.base_parse(hex_part, 16)
-    }
+    True -> int.base_parse(string.drop_start(s, 2), 16)
     False -> Error(Nil)
   }
 }
 
 fn try_parse_octal(s: String) -> Result(Int, Nil) {
   case string.starts_with(string.lowercase(s), "0o") {
-    True -> {
-      let oct_part = string.drop_start(s, 2)
-      int.base_parse(oct_part, 8)
-    }
+    True -> int.base_parse(string.drop_start(s, 2), 8)
     False -> Error(Nil)
+  }
+}
+
+fn parse_special_float(s: String) -> Result(Float, Nil) {
+  case s {
+    ".inf" | ".Inf" | ".INF" -> Ok(1.0 /. 0.0)
+    "-.inf" | "-.Inf" | "-.INF" -> Ok(-1.0 /. 0.0)
+    ".nan" | ".NaN" | ".NAN" -> Ok(0.0 /. 0.0)
+    _ -> Error(Nil)
   }
 }
 

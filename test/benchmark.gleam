@@ -6,7 +6,6 @@
 import gleam/io
 import gleam/string
 import gleamy/bench
-import simplifile
 import taffy
 import taffy/native as taffy_native
 

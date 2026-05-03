@@ -11,7 +11,7 @@ import taffy/parser/helpers.{
   skip_whitespace,
 }
 import taffy/parser/scalar.{parse_scalar, value_to_key_string}
-import taffy/parser/types.{type ParseError, type Parser, ParseError, Parser}
+import taffy/parser/types.{type ParseError, type Parser, ParseError}
 import taffy/value.{type YamlValue}
 
 pub fn parse_flow_sequence(
@@ -102,8 +102,7 @@ fn parse_flow_sequence_entry(
       use #(val, parser) <- result.try(parse_flow_sequence_entry(
         advance(parser) |> skip_whitespace,
       ))
-      let parser =
-        Parser(..parser, anchors: dict.insert(parser.anchors, name, val))
+      let parser = types.register_anchor(parser, name, val)
       Ok(#(val, parser))
     }
 
@@ -118,7 +117,7 @@ fn parse_flow_sequence_entry(
     Some(lexer.Tag(tag)) -> {
       let parser = advance(parser) |> skip_whitespace
       let is_str_tag =
-        tag == "!!str" || string.contains(tag, "tag:taffy.org,2002:str")
+        tag == "!!str" || string.contains(tag, "tag:yaml.org,2002:str")
       case current(parser), is_str_tag {
         Some(lexer.Comma), True
         | Some(lexer.BracketClose), True
@@ -443,17 +442,12 @@ fn parse_anchored_flow_key(
         _ -> parse_flow_mapping
       }
       use #(val, parser) <- result.try(parse_fn(advance(parser)))
-      let parser =
-        Parser(..parser, anchors: dict.insert(parser.anchors, name, val))
+      let parser = types.register_anchor(parser, name, val)
       Ok(#(value_to_key_string(val), parser))
     }
     _ -> {
       use #(key, parser) <- result.try(parse_flow_key_with_colon(parser))
-      let parser =
-        Parser(
-          ..parser,
-          anchors: dict.insert(parser.anchors, name, value.String(key)),
-        )
+      let parser = types.register_anchor(parser, name, value.String(key))
       Ok(#(key, parser))
     }
   }
@@ -476,7 +470,7 @@ fn parse_tagged_flow_key(
 ) -> Result(#(String, Parser), ParseError) {
   let parser = advance(parser) |> skip_whitespace
   let is_str_tag =
-    tag == "!!str" || string.contains(tag, "tag:taffy.org,2002:str")
+    tag == "!!str" || string.contains(tag, "tag:yaml.org,2002:str")
   case current(parser), is_str_tag {
     Some(lexer.Colon), True -> Ok(#("", parser))
     _, _ -> parse_flow_key_with_colon(parser)
@@ -507,6 +501,8 @@ fn collect_flow_key_parts(
       collect_flow_key_parts(parser, acc <> s)
     }
     Some(lexer.Indent(_)) | Some(lexer.Newline) -> {
+      // Indentation error inside a flow context just means the key has ended;
+      // hand the accumulated text back and let the caller re-encounter it.
       case skip_flow_whitespace(parser) {
         Error(_) -> Ok(#(string.trim_end(acc), parser))
         Ok(parser_after_ws) ->
@@ -540,6 +536,7 @@ fn collect_flow_plain_scalar_parts(
       case flow_whitespace_has_comment(parser) {
         True -> #(string.trim_end(acc), parser)
         False ->
+          // See collect_flow_key_parts: indentation error => scalar ended.
           case skip_flow_whitespace(parser) {
             Error(_) -> #(string.trim_end(acc), parser)
             Ok(parser_after_ws) ->
@@ -566,13 +563,12 @@ pub fn parse_flow_value(
     Some(lexer.BracketOpen) -> parse_flow_sequence(advance(parser))
     Some(lexer.BraceOpen) -> parse_flow_mapping(advance(parser))
     Some(lexer.Plain(s)) -> Ok(#(parse_scalar(s), advance(parser)))
-    Some(lexer.SingleQuoted(s)) -> Ok(#(value.String(s), advance(parser)))
-    Some(lexer.DoubleQuoted(s)) -> Ok(#(value.String(s), advance(parser)))
+    Some(lexer.SingleQuoted(s)) | Some(lexer.DoubleQuoted(s)) ->
+      Ok(#(value.String(s), advance(parser)))
     Some(lexer.Anchor(name)) -> {
       let parser = advance(parser) |> skip_whitespace
       use #(val, parser) <- result.try(parse_flow_value(parser))
-      let parser =
-        Parser(..parser, anchors: dict.insert(parser.anchors, name, val))
+      let parser = types.register_anchor(parser, name, val)
       Ok(#(val, parser))
     }
     Some(lexer.Alias(name)) -> {
@@ -585,7 +581,7 @@ pub fn parse_flow_value(
     Some(lexer.Tag(tag)) -> {
       let parser = advance(parser) |> skip_whitespace
       let is_str_tag =
-        tag == "!!str" || string.contains(tag, "tag:taffy.org,2002:str")
+        tag == "!!str" || string.contains(tag, "tag:yaml.org,2002:str")
       case current(parser), is_str_tag {
         Some(lexer.Comma), True
         | Some(lexer.BraceClose), True

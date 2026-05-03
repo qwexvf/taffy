@@ -1,19 +1,43 @@
 //// Parser helper functions.
 
 import gleam/int
-import gleam/list
 import gleam/option.{type Option, None, Some}
 import taffy/lexer
 import taffy/parser/types.{type Parser, Parser}
 
 pub fn current(parser: Parser) -> Option(lexer.Token) {
-  list.drop(parser.tokens, parser.pos)
-  |> list.first
-  |> option.from_result
+  case parser.tokens {
+    [first, ..] -> Some(first)
+    [] -> None
+  }
 }
 
 pub fn advance(parser: Parser) -> Parser {
-  Parser(..parser, pos: parser.pos + 1)
+  case parser.tokens {
+    [first, ..rest] ->
+      Parser(
+        ..parser,
+        tokens: rest,
+        consumed: [first, ..parser.consumed],
+        pos: parser.pos + 1,
+      )
+    [] -> parser
+  }
+}
+
+/// Undo one `advance` step in O(1). Returns the parser unchanged if nothing
+/// has been consumed.
+pub fn backtrack(parser: Parser) -> Parser {
+  case parser.consumed {
+    [last, ..rest] ->
+      Parser(
+        ..parser,
+        tokens: [last, ..parser.tokens],
+        consumed: rest,
+        pos: parser.pos - 1,
+      )
+    [] -> parser
+  }
 }
 
 pub fn skip_whitespace(parser: Parser) -> Parser {
@@ -130,6 +154,21 @@ fn skip_newlines_and_comments_tracking_loop(
   }
 }
 
+/// True if `token` ends the current line/expression: a newline, a structural
+/// indent, a comment, EOF, or absence of a token. Used to recognise places
+/// where YAML implicitly closes a value.
+pub fn is_terminator(token: Option(lexer.Token)) -> Bool {
+  case token {
+    Some(lexer.Newline)
+    | Some(lexer.Indent(_))
+    | Some(lexer.Comment(_))
+    | Some(lexer.Eof)
+    | None -> True
+    _ -> False
+  }
+}
+
+/// Debug formatter — preserves token kind so test output and traces are unambiguous.
 pub fn token_to_string(token: lexer.Token) -> String {
   case token {
     lexer.DocStart -> "---"
@@ -155,5 +194,18 @@ pub fn token_to_string(token: lexer.Token) -> String {
     lexer.Indent(n) -> "indent(" <> int.to_string(n) <> ")"
     lexer.Directive(d) -> "%" <> d
     lexer.Eof -> "EOF"
+  }
+}
+
+/// User-facing formatter — renders a token the way it appears in source.
+/// Used in `ParseError.message` so error text reads naturally.
+pub fn token_for_error(token: lexer.Token) -> String {
+  case token {
+    lexer.Plain(s) -> s
+    lexer.Newline -> "newline"
+    lexer.Indent(_) -> "indentation"
+    lexer.Comment(_) -> "comment"
+    lexer.Eof -> "end of input"
+    other -> token_to_string(other)
   }
 }

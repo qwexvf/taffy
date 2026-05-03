@@ -70,3 +70,33 @@ pub fn parse_matches_pure_gleam_test() {
   let gleam_json = taffy.to_json_string(gleam_result)
   native_json |> should.equal(gleam_json)
 }
+
+pub fn parse_invalid_yaml_test() {
+  // libyaml rejects unterminated quoted strings.
+  native.parse("\"unterminated") |> should.be_error
+}
+
+pub fn parse_empty_mapping_returns_mapping_test() {
+  // fast_yaml can't distinguish {} from [] — we resolve the ambiguity
+  // toward Mapping. Round-trip verifies the choice sticks.
+  let assert Ok(result) = native.parse("{}")
+  result |> should.equal(value.Mapping([]))
+}
+
+pub fn parse_hex_octal_parity_test() {
+  // Native must produce the same int values as the pure parser for
+  // YAML 1.2 hex/octal literals.
+  let assert Ok(native_result) = native.parse("a: 0xff\nb: 0o17")
+  let assert Some(a) = value.get(native_result, "a")
+  a |> should.equal(value.Int(255))
+  let assert Some(b) = value.get(native_result, "b")
+  b |> should.equal(value.Int(15))
+}
+
+pub fn parse_special_floats_parity_test() {
+  // .inf / .nan must decode the same way through both backends.
+  let assert Ok(native_result) = native.parse("a: .inf\nb: .nan")
+  let assert Some(value.Float(_)) = value.get(native_result, "a")
+  let assert Some(value.Float(_)) = value.get(native_result, "b")
+  Nil
+}

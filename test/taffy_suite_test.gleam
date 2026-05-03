@@ -4,7 +4,6 @@ import gleam/list
 import gleam/option.{None, Some}
 import gleam/result
 import gleam/string
-import gleeunit/should
 import simplifile
 import taffy
 import taffy/value
@@ -156,15 +155,36 @@ pub fn yaml_test_suite_test() {
     }
   }
 
-  // We allow some parse failures for unimplemented features
-  // Real parse failures threshold (not counting json mismatches)
-  case list.length(parse_failures) < 100 {
-    True -> Nil
-    False -> {
-      io.println("Too many parse failures!")
-      should.fail()
-    }
+  // Tight regression guard: any new parse failure or value mismatch fails CI.
+  // The panic message includes the first offending case names so CI logs
+  // pinpoint regressions without a separate scroll-back.
+  let parse_failure_baseline = 0
+  let json_mismatch_baseline = 0
+  case list.length(parse_failures) > parse_failure_baseline {
+    True -> panic as suite_failure_message("Parse failures", parse_failures)
+    False -> Nil
   }
+  case json_mismatches > json_mismatch_baseline {
+    True ->
+      panic as suite_failure_message("Value mismatches", json_mismatch_list)
+    False -> Nil
+  }
+}
+
+fn suite_failure_message(
+  category: String,
+  failures: List(#(String, String)),
+) -> String {
+  let preview =
+    failures
+    |> list.take(5)
+    |> list.map(fn(r) { "  - " <> r.1 })
+    |> string.join("\n")
+  category
+  <> " regressed: "
+  <> int.to_string(list.length(failures))
+  <> "\n"
+  <> preview
 }
 
 fn run_test_file(path: String) -> #(String, String) {
@@ -291,15 +311,23 @@ fn normalize_json(s: String) -> String {
   |> string.replace(" ", "")
 }
 
-/// Check if two JSON strings differ only in key ordering
+/// Check if two JSON strings differ only in key ordering by parsing both
+/// (JSON is a subset of YAML) and comparing with mapping keys sorted recursively.
 fn is_key_order_only(actual: String, expected: String) -> Bool {
-  // Simple heuristic: if they have the same length after normalization
-  // and same characters (sorted), it's likely just ordering
-  let a = normalize_json(actual)
-  let e = normalize_json(expected)
-  let a_sorted =
-    a |> string.to_graphemes |> list.sort(string.compare) |> string.concat
-  let e_sorted =
-    e |> string.to_graphemes |> list.sort(string.compare) |> string.concat
-  a_sorted == e_sorted
+  case taffy.parse(actual), taffy.parse(expected) {
+    Ok(a), Ok(e) -> sort_keys(a) == sort_keys(e)
+    _, _ -> False
+  }
+}
+
+fn sort_keys(val: taffy.Value) -> taffy.Value {
+  case val {
+    value.Sequence(items) -> value.Sequence(list.map(items, sort_keys))
+    value.Mapping(pairs) ->
+      pairs
+      |> list.map(fn(p) { #(p.0, sort_keys(p.1)) })
+      |> list.sort(fn(a, b) { string.compare(a.0, b.0) })
+      |> value.Mapping
+    other -> other
+  }
 }

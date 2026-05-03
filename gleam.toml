@@ -1,24 +1,30 @@
 name = "taffy"
-version = "1.0.0"
+version = "0.1.0"
+description = "A YAML 1.2 parser for Gleam, with an optional native fast_yaml C NIF backend."
+licences = ["Apache-2.0"]
+repository = { type = "github", user = "qwexvf", repo = "taffy" }
+links = [{ title = "Repository", href = "https://github.com/qwexvf/taffy" }]
 
-# Fill out these fields if you intend to generate HTML documentation or publish
-# your project to the Hex package manager.
-#
-# description = ""
-# licences = ["Apache-2.0"]
-# repository = { type = "github", user = "", repo = "" }
-# links = [{ title = "Website", href = "" }]
-#
-# For a full reference of all the available options, you can have a look at
-# https://gleam.run/writing-gleam/gleam-toml/.
+# Internal modules are excluded from generated Hex docs. The user-facing
+# surface is `taffy`, `taffy/value`, and `taffy/native`.
+internal_modules = [
+  "taffy/lexer",
+  "taffy/parser",
+  "taffy/parser/block",
+  "taffy/parser/explicit",
+  "taffy/parser/flow",
+  "taffy/parser/helpers",
+  "taffy/parser/scalar",
+  "taffy/parser/types",
+]
 
 [dependencies]
 gleam_stdlib = ">= 0.44.0 and < 2.0.0"
 gleam_json = ">= 3.1.0 and < 4.0.0"
-simplifile = ">= 2.4.0 and < 3.0.0"
 
 [dev_dependencies]
 gleeunit = ">= 1.0.0 and < 2.0.0"
 gleamy_bench = ">= 0.6.0 and < 1.0.0"
 yamerl = ">= 0.10.0 and < 1.0.0"
 fast_yaml = ">= 1.0.40 and < 2.0.0"
+simplifile = ">= 2.4.0 and < 3.0.0"
