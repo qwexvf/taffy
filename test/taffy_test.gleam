@@ -404,6 +404,22 @@ pub fn parse_unclosed_flow_mapping_test() {
   taffy.parse("{a: 1") |> should.be_error
 }
 
+pub fn parse_misindented_top_level_dash_test() {
+  // Top-level sequence with an inconsistent dash column: the second dash
+  // is at column 1 while the first dash sits at column 0 holding a mapping.
+  // The sequence parser locks seq_col on the first dash and rejects the
+  // misindented sibling per YAML 1.2 §8.2.1 (this is the YAML test suite
+  // ZVH3 case). Pinned here so the fix doesn't regress if the test-suite
+  // submodule is ever rebaselined.
+  //
+  // Note: the looser form `- a\n - b` is still accepted because the
+  // multi-line plain-scalar accumulator absorbs the second line as a
+  // continuation. That's a separate issue at a different layer; documented
+  // rather than asserted to keep the test honest about what's actually
+  // checked here.
+  taffy.parse("- key: value\n - item1\n") |> should.be_error
+}
+
 pub fn parse_undefined_alias_test() {
   taffy.parse("*nope") |> should.be_error
 }
