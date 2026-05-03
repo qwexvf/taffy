@@ -1,6 +1,6 @@
 # taffy
 
-> **Under development** — APIs may change, use main branch.
+> Pre-1.0 — APIs may change between minor versions until 1.0 lands.
 
 A YAML 1.2 parser for Gleam with an optional native C NIF backend for high performance.
 
@@ -24,10 +24,8 @@ A YAML 1.2 parser for Gleam with an optional native C NIF backend for high perfo
 
 ## Installation
 
-Add to your `gleam.toml`:
-
-```toml
-taffy = { git = "https://github.com/qwexvf/taffy", ref = "main" }
+```sh
+gleam add taffy
 ```
 
 For the native C NIF backend (optional, Erlang target only):
@@ -172,4 +170,6 @@ gleam test                # Run all tests (unit + YAML 1.2 test suite)
 gleam run -m benchmark    # Run parser benchmarks (requires dev deps)
 ```
 
-implemented with help of claude code
+## License
+
+Apache 2.0
