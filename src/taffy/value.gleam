@@ -156,6 +156,17 @@ fn find_duplicate_key(
   }
 }
 
+/// Count the total number of nodes in a value tree (including the root).
+/// Used by the parser to budget alias expansion against billion-laughs
+/// attacks; exposed so callers can apply their own size policies.
+pub fn size(value: YamlValue) -> Int {
+  case value {
+    Sequence(items) -> list.fold(items, 1, fn(acc, item) { acc + size(item) })
+    Mapping(pairs) -> list.fold(pairs, 1, fn(acc, p) { acc + size(p.1) })
+    _ -> 1
+  }
+}
+
 pub fn is_null(value: YamlValue) -> Bool {
   case value {
     Null -> True

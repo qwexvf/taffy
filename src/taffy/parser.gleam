@@ -1,6 +1,5 @@
 //// YAML parser - parses tokens into YAML values.
 
-import gleam/dict
 import gleam/list
 import gleam/option.{None, Some}
 import gleam/result
@@ -277,6 +276,23 @@ fn parse_value(
   parser: Parser,
   min_indent: Int,
 ) -> Result(#(YamlValue, Parser), ParseError) {
+  case types.enter_depth(parser) {
+    Error(_) ->
+      Error(ParseError(
+        "Maximum recursion depth exceeded (possible nesting bomb)",
+        parser.pos,
+      ))
+    Ok(parser) -> {
+      use #(val, parser) <- result.try(parse_value_dispatch(parser, min_indent))
+      Ok(#(val, types.exit_depth(parser)))
+    }
+  }
+}
+
+fn parse_value_dispatch(
+  parser: Parser,
+  min_indent: Int,
+) -> Result(#(YamlValue, Parser), ParseError) {
   case current(parser) {
     Some(lexer.Comment(_)) -> parse_value(advance(parser), min_indent)
     Some(lexer.Newline) -> parse_value_after_newline(parser, min_indent)
@@ -343,8 +359,8 @@ fn parse_alias_value(
   name: String,
   min_indent: Int,
 ) -> Result(#(YamlValue, Parser), ParseError) {
-  case dict.get(parser.anchors, name) {
-    Ok(alias_val) ->
+  case types.resolve_alias(parser, name) {
+    Ok(#(alias_val, parser)) ->
       case current(parser) {
         Some(lexer.Colon) -> {
           let key = scalar.value_to_key_string(alias_val)
@@ -357,6 +373,11 @@ fn parse_alias_value(
         }
         _ -> Ok(#(alias_val, parser))
       }
+    Error("budget exceeded") ->
+      Error(ParseError(
+        "Alias expansion budget exceeded (possible alias-bomb)",
+        parser.pos,
+      ))
     Error(_) -> Error(ParseError("Unknown anchor: " <> name, parser.pos))
   }
 }

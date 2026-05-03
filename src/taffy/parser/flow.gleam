@@ -108,8 +108,13 @@ fn parse_flow_sequence_entry(
 
     Some(lexer.Alias(name)) -> {
       let parser = advance(parser)
-      case dict.get(parser.anchors, name) {
-        Ok(val) -> Ok(#(val, parser))
+      case types.resolve_alias(parser, name) {
+        Ok(#(val, parser)) -> Ok(#(val, parser))
+        Error("budget exceeded") ->
+          Error(ParseError(
+            "Alias expansion budget exceeded (possible alias-bomb)",
+            parser.pos,
+          ))
         Error(_) -> Error(ParseError("Unknown anchor: " <> name, parser.pos))
       }
     }
@@ -458,8 +463,13 @@ fn parse_alias_flow_key(
   name: String,
 ) -> Result(#(String, Parser), ParseError) {
   let parser = advance(parser)
-  case dict.get(parser.anchors, name) {
-    Ok(val) -> Ok(#(value_to_key_string(val), parser))
+  case types.resolve_alias(parser, name) {
+    Ok(#(val, parser)) -> Ok(#(value_to_key_string(val), parser))
+    Error("budget exceeded") ->
+      Error(ParseError(
+        "Alias expansion budget exceeded (possible alias-bomb)",
+        parser.pos,
+      ))
     Error(_) -> Error(ParseError("Unknown anchor: " <> name, parser.pos))
   }
 }
@@ -573,8 +583,13 @@ pub fn parse_flow_value(
     }
     Some(lexer.Alias(name)) -> {
       let parser = advance(parser)
-      case dict.get(parser.anchors, name) {
-        Ok(val) -> Ok(#(val, parser))
+      case types.resolve_alias(parser, name) {
+        Ok(#(val, parser)) -> Ok(#(val, parser))
+        Error("budget exceeded") ->
+          Error(ParseError(
+            "Alias expansion budget exceeded (possible alias-bomb)",
+            parser.pos,
+          ))
         Error(_) -> Error(ParseError("Unknown anchor: " <> name, parser.pos))
       }
     }

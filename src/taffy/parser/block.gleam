@@ -692,8 +692,8 @@ fn parse_alias_key(
   acc: List(#(String, YamlValue)),
   parse_value_fn: ParseValueFn,
 ) -> Result(#(YamlValue, Parser), ParseError) {
-  case dict.get(parser.anchors, name) {
-    Ok(key_val) -> {
+  case types.resolve_alias(parser, name) {
+    Ok(#(key_val, parser)) -> {
       let key = value_to_key_string(key_val)
       case current(parser) {
         Some(lexer.Colon) ->
@@ -709,6 +709,11 @@ fn parse_alias_key(
         _ -> Ok(#(value.Mapping(list.reverse(acc)), parser))
       }
     }
+    Error("budget exceeded") ->
+      Error(ParseError(
+        "Alias expansion budget exceeded (possible alias-bomb)",
+        parser.pos,
+      ))
     Error(_) -> Error(ParseError("Unknown anchor: " <> name, parser.pos))
   }
 }
@@ -790,8 +795,13 @@ pub fn parse_mapping_key(
 
     Some(lexer.Alias(name)) -> {
       let parser = advance(parser)
-      case dict.get(parser.anchors, name) {
-        Ok(val) -> Ok(#(value_to_key_string(val), parser))
+      case types.resolve_alias(parser, name) {
+        Ok(#(val, parser)) -> Ok(#(value_to_key_string(val), parser))
+        Error("budget exceeded") ->
+          Error(ParseError(
+            "Alias expansion budget exceeded (possible alias-bomb)",
+            parser.pos,
+          ))
         Error(_) -> Error(ParseError("Unknown anchor: " <> name, parser.pos))
       }
     }
@@ -1047,8 +1057,13 @@ fn parse_explicit_key(
     Some(lexer.Folded(s)) -> Ok(#(s, advance(parser)))
     Some(lexer.Alias(name)) -> {
       let parser = advance(parser)
-      case dict.get(parser.anchors, name) {
-        Ok(val) -> Ok(#(value_to_key_string(val), parser))
+      case types.resolve_alias(parser, name) {
+        Ok(#(val, parser)) -> Ok(#(value_to_key_string(val), parser))
+        Error("budget exceeded") ->
+          Error(ParseError(
+            "Alias expansion budget exceeded (possible alias-bomb)",
+            parser.pos,
+          ))
         Error(_) -> Error(ParseError("Unknown anchor: " <> name, parser.pos))
       }
     }

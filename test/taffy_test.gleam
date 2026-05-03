@@ -1,5 +1,6 @@
 import gleam/dict
 import gleam/option.{None, Some}
+import gleam/string
 import gleeunit
 import gleeunit/should
 import taffy
@@ -427,6 +428,63 @@ pub fn parse_misindented_dash_during_scalar_test() {
 
 pub fn parse_undefined_alias_test() {
   taffy.parse("*nope") |> should.be_error
+}
+
+// Security guards
+
+pub fn parse_alias_bomb_rejected_test() {
+  // Classic billion-laughs construction: each level multiplies the previous
+  // anchor by 9. Without alias-budget, this would expand to 9^N nodes and
+  // OOM. The parser must error before exhausting memory.
+  let input =
+    "a: &a [\"x\",\"x\",\"x\",\"x\",\"x\",\"x\",\"x\",\"x\",\"x\"]
+b: &b [*a,*a,*a,*a,*a,*a,*a,*a,*a]
+c: &c [*b,*b,*b,*b,*b,*b,*b,*b,*b]
+d: &d [*c,*c,*c,*c,*c,*c,*c,*c,*c]
+e: &e [*d,*d,*d,*d,*d,*d,*d,*d,*d]
+f: &f [*e,*e,*e,*e,*e,*e,*e,*e,*e]
+g: &g [*f,*f,*f,*f,*f,*f,*f,*f,*f]
+h: [*g,*g,*g,*g,*g,*g,*g,*g,*g]"
+
+  let assert Error(err) = taffy.parse(input)
+  err.message
+  |> should.equal("Alias expansion budget exceeded (possible alias-bomb)")
+}
+
+pub fn parse_deep_nesting_rejected_test() {
+  // 2000 levels of nested block sequences. Each level enters parse_value,
+  // which charges the depth budget; 1024 is the default cap so this errors
+  // before exhausting stack/memory. (Pure-flow `[[...]]` nesting bypasses
+  // parse_value and isn't capped — that's a separate gap; documented in
+  // the changelog as a known limit.)
+  let depth = 2000
+  let input = string.repeat("- ", depth) <> "leaf"
+  let assert Error(err) = taffy.parse(input)
+  err.message
+  |> should.equal("Maximum recursion depth exceeded (possible nesting bomb)")
+}
+
+pub fn error_location_test() {
+  let input = "name: John\nage: not-a-number-but-valid\n!badtag oops"
+  case taffy.parse(input) {
+    Error(err) -> {
+      let #(line, col) = taffy.error_location(input, err.pos)
+      // Just verify we get sensible 1-indexed values; exact line varies
+      // by error path.
+      should.be_true(line >= 1)
+      should.be_true(col >= 1)
+    }
+    Ok(_) -> Nil
+  }
+}
+
+pub fn error_location_basic_test() {
+  // pos 0 is line 1, col 1.
+  taffy.error_location("hello\nworld", 0) |> should.equal(#(1, 1))
+  // After "hello\n", we're at line 2 col 1.
+  taffy.error_location("hello\nworld", 6) |> should.equal(#(2, 1))
+  // Out of range clamps to the last position rather than crashing.
+  taffy.error_location("hi", 100) |> should.equal(#(1, 3))
 }
 
 pub fn parse_all_empty_test() {

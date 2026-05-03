@@ -163,6 +163,33 @@ let yaml = taffy.to_yaml(value)
 `to_yaml` round-trips through `parse` for any value that doesn't carry
 metadata taffy doesn't preserve (tags, anchors, comments).
 
+### Error reporting
+
+```gleam
+case taffy.parse(input) {
+  Ok(value) -> // ...
+  Error(err) -> {
+    let #(line, col) = taffy.error_location(input, err.pos)
+    io.println(
+      "parse error at " <> int.to_string(line) <> ":" <> int.to_string(col)
+        <> " — " <> err.message,
+    )
+  }
+}
+```
+
+### Security guards
+
+`parse` rejects two classes of malicious input by default:
+
+- **Alias bombs** — chained `&a → *a` references whose expansion would
+  exceed 10M nodes (configurable per-parser internally).
+- **Deep block nesting** — block sequences/mappings nested past 1024 levels.
+
+These let you accept YAML from untrusted sources (config uploads, API
+payloads) without booby-trapping memory. See `CHANGELOG.md` for known
+limits — pure-flow `[[[...]]]` nesting is not currently capped.
+
 ## Development
 
 ```sh

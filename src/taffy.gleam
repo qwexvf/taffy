@@ -42,6 +42,7 @@ import gleam/json.{type Json}
 import gleam/list
 import gleam/option.{type Option}
 import gleam/result
+import gleam/string
 import taffy/lexer
 import taffy/parser
 import taffy/parser/types.{type ParseError, ParseError}
@@ -52,6 +53,38 @@ pub type Value =
 
 pub type Error =
   ParseError
+
+/// Compute `#(line, column)` (both 1-indexed) for a grapheme position
+/// inside `input`. Out-of-range positions clamp to the last line/column.
+/// Useful for turning `error.pos` into a user-facing location:
+///
+/// ```gleam
+/// case taffy.parse(input) {
+///   Ok(_) -> ...
+///   Error(err) -> {
+///     let #(line, col) = taffy.error_location(input, err.pos)
+///     io.println(err.message <> " at " <> int.to_string(line) <>
+///       ":" <> int.to_string(col))
+///   }
+/// }
+/// ```
+pub fn error_location(input: String, pos: Int) -> #(Int, Int) {
+  error_location_loop(string.to_graphemes(input), pos, 1, 1)
+}
+
+fn error_location_loop(
+  graphemes: List(String),
+  remaining: Int,
+  line: Int,
+  col: Int,
+) -> #(Int, Int) {
+  case graphemes, remaining {
+    _, n if n <= 0 -> #(line, col)
+    [], _ -> #(line, col)
+    ["\n", ..rest], _ -> error_location_loop(rest, remaining - 1, line + 1, 1)
+    [_, ..rest], _ -> error_location_loop(rest, remaining - 1, line, col + 1)
+  }
+}
 
 /// Parse a single YAML document. For multi-document streams use `parse_all`.
 /// On error the position points at the grapheme where parsing gave up.
