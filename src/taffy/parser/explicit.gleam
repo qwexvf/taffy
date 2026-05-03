@@ -2,7 +2,7 @@
 
 import gleam/dict
 import gleam/list
-import gleam/option.{Some}
+import gleam/option.{None, Some}
 import gleam/result
 import taffy/lexer
 import taffy/parser/block
@@ -335,9 +335,12 @@ pub fn parse_explicit_key_value(
       Ok(#(s, advance(parser)))
     Some(lexer.Literal(s)) | Some(lexer.Folded(s)) -> Ok(#(s, advance(parser)))
     Some(lexer.Dash) -> {
-      use #(seq_val, parser) <- result.try(block.parse_block_sequence(
+      // Dash shares a line with `?`; column is unknown — leave seq_col
+      // unlocked and let the first Indent-preceded dash establish it.
+      use #(seq_val, parser) <- result.try(block.parse_block_sequence_at(
         parser,
         min_indent,
+        None,
         parse_value_fn,
       ))
       Ok(#(value_to_key_string(seq_val), parser))
@@ -465,9 +468,10 @@ fn parse_key_after_indent_token(
   case current(after_indent) {
     Some(lexer.Dash) -> {
       let parser = helpers.backtrack(after_indent)
-      use #(seq_val, parser) <- result.try(block.parse_block_sequence(
+      use #(seq_val, parser) <- result.try(block.parse_block_sequence_at(
         parser,
         n,
+        Some(n),
         parse_value_fn,
       ))
       Ok(#(value_to_key_string(seq_val), parser))
@@ -494,13 +498,14 @@ fn parse_explicit_value_after_newline(
   parse_value_fn: ParseValueFn,
 ) -> Result(#(YamlValue, Parser), ParseError) {
   case current(parser) {
-    Some(lexer.Dash) -> block.parse_block_sequence(parser, 0, parse_value_fn)
+    Some(lexer.Dash) ->
+      block.parse_block_sequence_at(parser, 0, None, parse_value_fn)
     Some(lexer.Indent(n)) -> {
       let after_indent = advance(parser)
       case current(after_indent) {
         Some(lexer.Dash) -> {
           let parser = helpers.backtrack(after_indent)
-          block.parse_block_sequence(parser, n, parse_value_fn)
+          block.parse_block_sequence_at(parser, n, Some(n), parse_value_fn)
         }
         _ -> {
           let parser = helpers.backtrack(after_indent)

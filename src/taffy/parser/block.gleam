@@ -18,21 +18,33 @@ pub fn parse_block_sequence(
   min_indent: Int,
   parse_value_fn: ParseValueFn,
 ) -> Result(#(YamlValue, Parser), ParseError) {
+  parse_block_sequence_at(parser, min_indent, None, parse_value_fn)
+}
+
+/// Variant of `parse_block_sequence` that lets the caller declare the actual
+/// column of the first dash. Callers that arrive via an `Indent(n)` token
+/// know `n`; top-level callers know `0`. When `dash_col` is `Some`, dashes
+/// at any other column are rejected (per YAML 1.2 §8.2.1). When `None`, the
+/// caller doesn't know the column and the parser falls back to the older
+/// lenient behaviour — the first `Indent`-preceded dash establishes seq_col.
+pub fn parse_block_sequence_at(
+  parser: Parser,
+  min_indent: Int,
+  dash_col: Option(Int),
+  parse_value_fn: ParseValueFn,
+) -> Result(#(YamlValue, Parser), ParseError) {
   let entry_indent = case min_indent {
     0 -> Some(0)
     _ -> None
   }
   let parser = Parser(..parser, seq_entry_indent: entry_indent)
-  parse_block_sequence_items(parser, min_indent, [], parse_value_fn)
-}
-
-fn parse_block_sequence_items(
-  parser: Parser,
-  min_indent: Int,
-  acc: List(YamlValue),
-  parse_value_fn: ParseValueFn,
-) -> Result(#(YamlValue, Parser), ParseError) {
-  parse_block_sequence_items_col(parser, min_indent, None, acc, parse_value_fn)
+  parse_block_sequence_items_col(
+    parser,
+    min_indent,
+    dash_col,
+    [],
+    parse_value_fn,
+  )
 }
 
 fn parse_block_sequence_items_col(

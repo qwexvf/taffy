@@ -292,8 +292,18 @@ fn parse_value(
     Some(lexer.Tag(tag)) -> parse_tagged_value(parser, tag, min_indent)
     Some(lexer.BracketOpen) -> parse_flow_sequence_value(parser, min_indent)
     Some(lexer.BraceOpen) -> parse_flow_mapping_value(parser, min_indent)
-    Some(lexer.Dash) ->
-      block.parse_block_sequence(parser, min_indent, parse_value)
+    Some(lexer.Dash) -> {
+      // The dash arrived without a preceding Indent token. At top level
+      // (min_indent == 0) the parser is by definition at column 0 — every
+      // entry-point passes 0 from start-of-document. For inner recursive
+      // calls (min_indent > 0) the dash shares a line with its parent
+      // (e.g., `- - foo`) and the column is unknown.
+      let dash_col = case min_indent {
+        0 -> Some(0)
+        _ -> None
+      }
+      block.parse_block_sequence_at(parser, min_indent, dash_col, parse_value)
+    }
     Some(lexer.Question) ->
       explicit.parse_explicit_mapping(parser, min_indent, parse_value)
     Some(lexer.Colon) -> parse_colon_value(parser, min_indent)
@@ -603,7 +613,7 @@ fn parse_indented_value(
   case current(parser) {
     Some(lexer.Dash) ->
       case is_sequence_dash(parser, n) {
-        True -> block.parse_block_sequence(parser, n, parse_value)
+        True -> block.parse_block_sequence_at(parser, n, Some(n), parse_value)
         False -> parse_value(parser, min_indent)
       }
     Some(lexer.Plain(_))

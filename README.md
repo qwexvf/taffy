@@ -8,8 +8,7 @@ A YAML 1.2 parser for Gleam with an optional native C NIF backend for high perfo
 
 - **Pure Gleam** — works on Erlang and JavaScript targets, no FFI required
 - **Native backend** — optional C NIF via [fast_yaml](https://github.com/processone/fast_yaml) for ~3-7x faster parsing
-- **YAML 1.2 compliant** — passes 350/351 official YAML test suite cases
-  - The remaining case (`Wrong indented sequence item`) is currently lenient — taffy accepts an input the spec says should fail. One other case (`Mixed Block Mapping (implicit to explicit)`) parses correctly but emits keys in a different order from the reference output.
+- **YAML 1.2 compliant** — passes 351/351 official YAML test suite cases (one parses correctly but emits keys in a different order from the reference output)
 - **Merge keys** — `<<: *anchor` and `<<: [*a, *b]` resolved automatically per YAML 1.1
 - **JSON + YAML output** — `to_json_string` and `to_yaml` for round-tripping
 
