@@ -1,13 +1,20 @@
-//// Native YAML parsing backend using fast_yaml (C NIF / libyaml).
-////
-//// Provides the same `YamlValue` output as the pure Gleam parser but
-//// ~16-250x faster. Requires `fast_yaml` as a dependency.
+//// Native YAML parsing backend wrapping the `fast_yaml` C NIF (libyaml).
+//// Erlang target only — requires `fast_yaml` in your dependencies.
+//// Output is the same `YamlValue` shape as the pure-Gleam parser but
+//// ~3-7× faster on large documents.
 ////
 //// ```gleam
 //// import taffy/native
 ////
 //// let assert Ok(value) = native.parse("name: John\nage: 30")
 //// ```
+////
+//// One known divergence from the pure parser: `fast_yaml` represents both
+//// `{}` and `[]` as the empty Erlang list at the term level, so the
+//// distinction can't be recovered from the decoded value alone. Taffy
+//// resolves the ambiguity in favour of `Mapping([])` since `{}` is the
+//// more common author intent; users who need `Sequence([])` for `[]`
+//// should use the pure parser.
 
 import gleam/dynamic.{type Dynamic}
 import gleam/list

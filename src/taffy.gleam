@@ -1,28 +1,39 @@
-//// YAML parser for Gleam.
+//// A pure-Gleam YAML 1.2 parser. Passes 351/351 of the official YAML test
+//// suite. Works on both Erlang and JavaScript targets; an optional native
+//// backend (`taffy/native`, Erlang only) wraps `fast_yaml` for ~3-7×
+//// speedup on large documents.
 ////
-//// A pure Gleam YAML 1.2 parser supporting:
-//// - Scalars: strings, numbers, booleans, null
-//// - Block collections: sequences and mappings
-//// - Flow collections: [a, b] and {key: value}
-//// - Multi-line strings: | (literal) and > (folded)
-//// - Anchors and aliases: &anchor and *alias
-//// - Comments: # comment
-////
-//// ## Quick Start
+//// ## Quick start
 ////
 //// ```gleam
 //// import taffy
 ////
 //// pub fn main() {
-////   let input = "
-//// name: John
-//// age: 30
-//// active: true
-//// "
-////   let assert Ok(value) = taffy.parse(input)
+////   let assert Ok(value) =
+////     taffy.parse("name: John\nage: 30\ntags:\n  - gleam\n  - erlang")
+////
 ////   let assert Ok(name) = taffy.get(value, "name")
+////   let json = taffy.to_json_string(value)
 //// }
 //// ```
+////
+//// ## Supported YAML features
+////
+//// - Scalars: strings, numbers (incl. `0x`, `0o`, `.inf`, `.nan`),
+////   booleans, null
+//// - Block + flow collections: `- item`, `key: value`, `[a, b]`,
+////   `{k: v}`
+//// - Multi-line strings: `|` (literal) and `>` (folded)
+//// - Anchors and aliases: `&anchor` and `*alias`
+//// - Merge keys: `<<: *anchor` and `<<: [*a, *b]`, resolved automatically
+//// - Multi-document streams via `parse_all`
+//// - Comments, document markers (`---`, `...`), tag directives
+////
+//// ## Output
+////
+//// - `to_json` / `to_json_string` — convert to `gleam_json` values
+//// - `to_yaml` — emit block-style YAML, round-trips through `parse`
+//// - `validate_unique_keys` — opt-in YAML 1.2 strict duplicate-key check
 
 import gleam/dict.{type Dict}
 import gleam/float

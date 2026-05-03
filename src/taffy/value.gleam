@@ -1,4 +1,7 @@
-//// YAML value types.
+//// The `YamlValue` type and direct accessors. Most users want the
+//// re-exports on the top-level `taffy` module; this module is exposed for
+//// pattern-matching (`value.Null`, `value.Mapping(_)`) and for direct
+//// `YamlValue` construction in tests.
 
 import gleam/dict.{type Dict}
 import gleam/float
