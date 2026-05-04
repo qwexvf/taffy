@@ -1,6 +1,5 @@
 //// Flow collection parsing (sequences and mappings in [] and {} syntax).
 
-import gleam/dict
 import gleam/list
 import gleam/option.{Some}
 import gleam/result

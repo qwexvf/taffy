@@ -22,9 +22,14 @@ import gleam/option.{type Option, None, Some}
 import gleam/result
 import gleam/string
 import taffy/parser/scalar
+import taffy/parser/types.{type ParseError, ParseError}
 import taffy/value.{type YamlValue}
 
-pub fn parse(input: String) -> Result(YamlValue, String) {
+/// Parse a single document via `fast_yaml`. The error type matches the
+/// pure parser's so callers can swap backends without changing their
+/// error-handling. `pos` is always 0 here — `fast_yaml` doesn't expose a
+/// position on its error path.
+pub fn parse(input: String) -> Result(YamlValue, ParseError) {
   ensure_all_started(binary_to_atom("fast_yaml"))
   case fast_yaml_decode(input) {
     Ok(docs) -> {
@@ -37,7 +42,9 @@ pub fn parse(input: String) -> Result(YamlValue, String) {
   }
 }
 
-pub fn parse_all(input: String) -> Result(List(YamlValue), String) {
+/// Parse a multi-document stream via `fast_yaml`. Same error semantics
+/// as `parse`.
+pub fn parse_all(input: String) -> Result(List(YamlValue), ParseError) {
   ensure_all_started(binary_to_atom("fast_yaml"))
   case fast_yaml_decode(input) {
     Ok(docs) -> Ok(decode_documents(docs))
@@ -54,9 +61,8 @@ fn ensure_all_started(app: Dynamic) -> Dynamic
 @external(erlang, "erlang", "binary_to_atom")
 fn binary_to_atom(name: String) -> Dynamic
 
-fn format_error(err: Dynamic) -> String {
-  let str = string.inspect(err)
-  "fast_yaml decode error: " <> str
+fn format_error(err: Dynamic) -> ParseError {
+  ParseError("fast_yaml decode error: " <> string.inspect(err), 0)
 }
 
 fn decode_documents(docs: Dynamic) -> List(YamlValue) {

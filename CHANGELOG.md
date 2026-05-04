@@ -26,7 +26,9 @@ Initial Hex release.
 - `get` / `get_or` / `get_path` / `index` for navigation
 - Merge keys (`<<: *anchor`, `<<: [*a, *b]`) resolved automatically
 - Optional native backend (`taffy/native`) wrapping `fast_yaml` C NIF on
-  Erlang for ~3-7× speedup on large documents
+  Erlang for ~3-7× speedup on large documents. Returns the same `ParseError`
+  type as the pure parser so callers can swap backends without changing
+  error handling.
 
 ### Security
 - Alias-expansion budget (default 10M nodes) defends against

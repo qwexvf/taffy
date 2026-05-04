@@ -1,6 +1,5 @@
 //// Explicit mapping parsing (using ? for keys).
 
-import gleam/dict
 import gleam/list
 import gleam/option.{None, Some}
 import gleam/result
