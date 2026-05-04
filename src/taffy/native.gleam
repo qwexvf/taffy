@@ -128,20 +128,20 @@ fn decode_pair(item: Dynamic) -> Result(#(String, YamlValue), Nil) {
   Ok(#(k, convert_value(raw_val)))
 }
 
-@external(erlang, "native_ffi", "to_list")
+@external(erlang, "taffy_ffi", "to_list")
 fn dynamic_to_list(val: Dynamic) -> Result(List(Dynamic), Nil)
 
-@external(erlang, "native_ffi", "to_string")
+@external(erlang, "taffy_ffi", "to_string")
 fn dynamic_to_string(val: Dynamic) -> Result(String, Nil)
 
-@external(erlang, "native_ffi", "to_int")
+@external(erlang, "taffy_ffi", "to_int")
 fn dynamic_to_int(val: Dynamic) -> Result(Int, Nil)
 
-@external(erlang, "native_ffi", "to_float")
+@external(erlang, "taffy_ffi", "to_float")
 fn dynamic_to_float(val: Dynamic) -> Result(Float, Nil)
 
-@external(erlang, "native_ffi", "is_tuple2")
+@external(erlang, "taffy_ffi", "is_tuple2")
 fn is_tuple2(val: Dynamic) -> Bool
 
-@external(erlang, "native_ffi", "decode_tuple2")
+@external(erlang, "taffy_ffi", "decode_tuple2")
 fn decode_tuple2(val: Dynamic) -> Result(#(Dynamic, Dynamic), Nil)

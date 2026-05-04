@@ -1,4 +1,4 @@
--module(native_ffi).
+-module(taffy_ffi).
 -export([to_list/1, to_string/1, to_int/1, to_float/1, is_tuple2/1, decode_tuple2/1]).
 
 to_list(Val) when is_list(Val) -> {ok, Val};
