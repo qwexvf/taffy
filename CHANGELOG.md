@@ -2,10 +2,11 @@
 
 All notable changes to taffy will be documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/) and the project adheres to
-[Semantic Versioning](https://semver.org/) (with the caveat that pre-1.0
-versions may break compatibility on minor bumps).
+[Semantic Versioning](https://semver.org/): breaking changes to the public
+API of `taffy`, `taffy/value`, or `taffy/native` will bump the major
+version.
 
-## [0.1.0] — 2026-05-04
+## [1.0.0] — 2026-05-04
 
 Initial Hex release.
 
