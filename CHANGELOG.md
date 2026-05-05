@@ -6,6 +6,15 @@ All notable changes to taffy will be documented here. Format follows
 API of `taffy`, `taffy/value`, or `taffy/native` will bump the major
 version.
 
+## [1.0.1] — 2026-05-05
+
+### Docs
+- Drop the "Supported YAML Features" subset list from README and module
+  docs — it read like a disclaimer of incomplete support next to the
+  YAML 1.2 / 351-of-351 compliance claim.
+- Split the README features bullet so `to_json_string` (one-way JSON
+  output) is no longer grouped with `to_yaml` round-tripping.
+
 ## [1.0.0] — 2026-05-04
 
 Initial Hex release.

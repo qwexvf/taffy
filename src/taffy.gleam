@@ -17,18 +17,6 @@
 //// }
 //// ```
 ////
-//// ## Supported YAML features
-////
-//// - Scalars: strings, numbers (incl. `0x`, `0o`, `.inf`, `.nan`),
-////   booleans, null
-//// - Block + flow collections: `- item`, `key: value`, `[a, b]`,
-////   `{k: v}`
-//// - Multi-line strings: `|` (literal) and `>` (folded)
-//// - Anchors and aliases: `&anchor` and `*alias`
-//// - Merge keys: `<<: *anchor` and `<<: [*a, *b]`, resolved automatically
-//// - Multi-document streams via `parse_all`
-//// - Comments, document markers (`---`, `...`), tag directives
-////
 //// ## Output
 ////
 //// - `to_json` / `to_json_string` — convert to `gleam_json` values

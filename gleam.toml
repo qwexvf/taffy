@@ -1,5 +1,5 @@
 name = "taffy"
-version = "1.0.0"
+version = "1.0.1"
 description = "A YAML 1.2 parser for Gleam, with an optional native fast_yaml C NIF backend."
 licences = ["Apache-2.0"]
 repository = { type = "github", user = "qwexvf", repo = "taffy" }
