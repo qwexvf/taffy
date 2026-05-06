@@ -6,6 +6,20 @@ All notable changes to taffy will be documented here. Format follows
 API of `taffy`, `taffy/value`, or `taffy/native` will bump the major
 version.
 
+## [1.0.2] — 2026-05-06
+
+### Performance
+- Rewrite the pure-Gleam lexer on a `BitArray` with byte-prefix pattern
+  matching, replacing the upfront `string.to_graphemes` walk and the
+  per-step `List(String)` cons. Hot scanners and the plain scalar reader
+  now slice the input once at the boundary instead of cons-per-byte.
+  Block scalar accumulators move from `String` concat (O(n²)) to
+  list-cons + single join.
+- Roughly 2× faster on medium and large inputs (e.g. ~330 IPS on the
+  ~2000-line OpenAPI sample, up from ~157). Pure Gleam is now ~67% the
+  speed of the libyaml C NIF on large input. No public API changes;
+  351/351 conformance suite still passes.
+
 ## [1.0.1] — 2026-05-05
 
 ### Docs
