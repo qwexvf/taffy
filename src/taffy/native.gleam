@@ -53,12 +53,15 @@ pub fn parse_all(input: String) -> Result(List(YamlValue), ParseError) {
 }
 
 @external(erlang, "fast_yaml", "decode")
+@external(javascript, "../taffy_ffi.mjs", "fast_yaml_decode")
 fn fast_yaml_decode(input: String) -> Result(Dynamic, Dynamic)
 
 @external(erlang, "application", "ensure_all_started")
+@external(javascript, "../taffy_ffi.mjs", "ensure_all_started")
 fn ensure_all_started(app: Dynamic) -> Dynamic
 
 @external(erlang, "erlang", "binary_to_atom")
+@external(javascript, "../taffy_ffi.mjs", "binary_to_atom")
 fn binary_to_atom(name: String) -> Dynamic
 
 fn format_error(err: Dynamic) -> ParseError {
@@ -129,19 +132,25 @@ fn decode_pair(item: Dynamic) -> Result(#(String, YamlValue), Nil) {
 }
 
 @external(erlang, "taffy_ffi", "to_list")
+@external(javascript, "../taffy_ffi.mjs", "to_list")
 fn dynamic_to_list(val: Dynamic) -> Result(List(Dynamic), Nil)
 
 @external(erlang, "taffy_ffi", "to_string")
+@external(javascript, "../taffy_ffi.mjs", "to_string")
 fn dynamic_to_string(val: Dynamic) -> Result(String, Nil)
 
 @external(erlang, "taffy_ffi", "to_int")
+@external(javascript, "../taffy_ffi.mjs", "to_int")
 fn dynamic_to_int(val: Dynamic) -> Result(Int, Nil)
 
 @external(erlang, "taffy_ffi", "to_float")
+@external(javascript, "../taffy_ffi.mjs", "to_float")
 fn dynamic_to_float(val: Dynamic) -> Result(Float, Nil)
 
 @external(erlang, "taffy_ffi", "is_tuple2")
+@external(javascript, "../taffy_ffi.mjs", "is_tuple2")
 fn is_tuple2(val: Dynamic) -> Bool
 
 @external(erlang, "taffy_ffi", "decode_tuple2")
+@external(javascript, "../taffy_ffi.mjs", "decode_tuple2")
 fn decode_tuple2(val: Dynamic) -> Result(#(Dynamic, Dynamic), Nil)

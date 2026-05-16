@@ -9,12 +9,14 @@ import gleam/int
 import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/result
+import gleam/set.{type Set}
 import gleam/string
 
 /// Note on `Mapping`: pairs are stored in YAML insertion order. Taffy does
-/// not currently reject duplicate keys (YAML 1.2 says it should — this is a
-/// known gap). When duplicates exist, `get` / `get_path` return the first
-/// match while `as_dict` collapses to last-wins.
+/// not currently reject duplicate keys (YAML 1.2 says it should — call
+/// `taffy.validate_unique_keys` to opt in). When duplicates exist, `get` /
+/// `get_path` / `as_dict` all return the **first** match — collapse is
+/// first-wins and consistent across accessors.
 pub type YamlValue {
   Null
   Bool(Bool)
@@ -96,9 +98,20 @@ pub fn as_list(value: YamlValue) -> Option(List(YamlValue)) {
 
 pub fn as_dict(value: YamlValue) -> Option(Dict(String, YamlValue)) {
   case value {
-    Mapping(pairs) -> Some(dict.from_list(pairs))
+    Mapping(pairs) -> Some(pairs_to_first_wins_dict(pairs))
     _ -> None
   }
+}
+
+fn pairs_to_first_wins_dict(
+  pairs: List(#(String, YamlValue)),
+) -> Dict(String, YamlValue) {
+  list.fold(pairs, dict.new(), fn(acc, p) {
+    case dict.has_key(acc, p.0) {
+      True -> acc
+      False -> dict.insert(acc, p.0, p.1)
+    }
+  })
 }
 
 pub fn as_pairs(value: YamlValue) -> Option(List(#(String, YamlValue))) {
@@ -130,7 +143,7 @@ pub fn index(value: YamlValue, idx: Int) -> Option(YamlValue) {
 pub fn check_no_duplicates(value: YamlValue) -> Result(Nil, String) {
   case value {
     Mapping(pairs) -> {
-      case find_duplicate_key(pairs, []) {
+      case find_duplicate_key(pairs, set.new()) {
         Some(key) -> Error(key)
         None -> {
           list.try_each(pairs, fn(p) { check_no_duplicates(p.1) })
@@ -144,14 +157,14 @@ pub fn check_no_duplicates(value: YamlValue) -> Result(Nil, String) {
 
 fn find_duplicate_key(
   pairs: List(#(String, YamlValue)),
-  seen: List(String),
+  seen: Set(String),
 ) -> Option(String) {
   case pairs {
     [] -> None
     [#(k, _), ..rest] ->
-      case list.contains(seen, k) {
+      case set.contains(seen, k) {
         True -> Some(k)
-        False -> find_duplicate_key(rest, [k, ..seen])
+        False -> find_duplicate_key(rest, set.insert(seen, k))
       }
   }
 }
@@ -253,11 +266,36 @@ fn emit_string(s: String) -> String {
 }
 
 fn escape_for_double_quote(s: String) -> String {
-  s
-  |> string.replace("\\", "\\\\")
-  |> string.replace("\"", "\\\"")
-  |> string.replace("\n", "\\n")
-  |> string.replace("\t", "\\t")
+  string.to_utf_codepoints(s)
+  |> list.map(escape_codepoint)
+  |> string.concat
+}
+
+fn escape_codepoint(cp: UtfCodepoint) -> String {
+  case string.utf_codepoint_to_int(cp) {
+    0 -> "\\0"
+    7 -> "\\a"
+    8 -> "\\b"
+    9 -> "\\t"
+    10 -> "\\n"
+    11 -> "\\v"
+    12 -> "\\f"
+    13 -> "\\r"
+    27 -> "\\e"
+    34 -> "\\\""
+    92 -> "\\\\"
+    127 -> "\\x7f"
+    n if n < 32 -> "\\x" <> pad2_hex(n)
+    _ -> string.from_utf_codepoints([cp])
+  }
+}
+
+fn pad2_hex(n: Int) -> String {
+  let s = int.to_base16(n) |> string.lowercase
+  case string.length(s) {
+    1 -> "0" <> s
+    _ -> s
+  }
 }
 
 fn is_plain_safe(s: String) -> Bool {
@@ -318,10 +356,8 @@ fn merge_pairs(pairs: List(#(String, YamlValue))) -> List(#(String, YamlValue)) 
     [] -> own
     _ -> {
       let merged = list.flat_map(merged_sources, extract_merge_pairs)
-      let own_keys =
-        own
-        |> list.map(fn(p) { p.0 })
-      append_unique(own, merged, own_keys)
+      let seen = list.fold(own, set.new(), fn(s, p) { set.insert(s, p.0) })
+      append_unique(own, merged, seen)
     }
   }
 }
@@ -335,16 +371,24 @@ fn extract_merge_pairs(value: YamlValue) -> List(#(String, YamlValue)) {
 }
 
 fn append_unique(
-  acc: List(#(String, YamlValue)),
+  own: List(#(String, YamlValue)),
   to_add: List(#(String, YamlValue)),
-  seen: List(String),
+  seen: Set(String),
+) -> List(#(String, YamlValue)) {
+  list.append(own, collect_unique(to_add, seen, []))
+}
+
+fn collect_unique(
+  to_add: List(#(String, YamlValue)),
+  seen: Set(String),
+  acc: List(#(String, YamlValue)),
 ) -> List(#(String, YamlValue)) {
   case to_add {
-    [] -> acc
+    [] -> list.reverse(acc)
     [#(k, v), ..rest] ->
-      case list.contains(seen, k) {
-        True -> append_unique(acc, rest, seen)
-        False -> append_unique(list.append(acc, [#(k, v)]), rest, [k, ..seen])
+      case set.contains(seen, k) {
+        True -> collect_unique(rest, seen, acc)
+        False -> collect_unique(rest, set.insert(seen, k), [#(k, v), ..acc])
       }
   }
 }

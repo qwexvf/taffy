@@ -3,20 +3,28 @@
 //// Compares taffy (pure Gleam) vs fast_yaml (C NIF / libyaml) vs yamerl (pure Erlang).
 //// Run with: gleam run -m benchmark
 
+@target(erlang)
 import gleam/io
+@target(erlang)
 import gleam/string
+@target(erlang)
 import gleamy/bench
+@target(erlang)
 import taffy
+@target(erlang)
 import taffy/native as taffy_native
 
 // FFI bindings for fast_yaml
+@target(erlang)
 @external(erlang, "fast_yaml", "decode")
 fn fast_yaml_decode(input: String) -> Result(a, b)
 
 // FFI bindings for yamerl
+@target(erlang)
 @external(erlang, "yamerl_constr", "string")
 fn yamerl_string(input: String) -> a
 
+@target(erlang)
 pub fn main() {
   io.println("=== YAML Parser Benchmark ===")
   io.println("")
@@ -206,17 +214,21 @@ components:
   io.println("Done.")
 }
 
+@target(erlang)
 @external(erlang, "application", "ensure_all_started")
 fn ensure_started(app: a) -> b
 
+@target(erlang)
 fn start_fast_yaml() -> Nil {
   ensure_started(fast_yaml_atom())
   Nil
 }
 
+@target(erlang)
 @external(erlang, "erlang", "binary_to_atom")
 fn binary_to_atom(name: String) -> a
 
+@target(erlang)
 fn fast_yaml_atom() -> a {
   binary_to_atom("fast_yaml")
 }

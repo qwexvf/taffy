@@ -42,6 +42,24 @@ pub type Value =
 pub type Error =
   ParseError
 
+/// Per-parse safety knobs. Construct via `default_options()` and override
+/// fields, e.g. `Options(..taffy.default_options(), max_depth: 64)`.
+///
+/// - `alias_budget` — node-count ceiling for alias expansion. Defends
+///   against billion-laughs / alias-bomb constructions. Default 10M.
+/// - `max_depth` — maximum recursive value-parsing depth. Defends against
+///   deeply nested block input. Default 1024.
+pub type Options {
+  Options(alias_budget: Int, max_depth: Int)
+}
+
+pub fn default_options() -> Options {
+  Options(
+    alias_budget: types.default_alias_budget,
+    max_depth: types.default_max_depth,
+  )
+}
+
 /// Compute `#(line, column)` (both 1-indexed) for a grapheme position
 /// inside `input`. Out-of-range positions clamp to the last line/column.
 /// Useful for turning `error.pos` into a user-facing location:
@@ -94,6 +112,33 @@ pub fn parse_all(input: String) -> Result(List(Value), Error) {
     Error(#(msg, pos)) -> Error(ParseError(msg, pos))
     Ok(tokens) ->
       parser.parse_all(tokens) |> result.map(list.map(_, value.resolve_merges))
+  }
+}
+
+/// Like `parse` but with custom safety limits. Useful when accepting YAML
+/// from untrusted callers and the defaults are too generous (or too tight).
+pub fn parse_with_options(
+  input: String,
+  options: Options,
+) -> Result(Value, Error) {
+  case lexer.tokenize(input) {
+    Error(#(msg, pos)) -> Error(ParseError(msg, pos))
+    Ok(tokens) ->
+      parser.parse_with(tokens, options.alias_budget, options.max_depth)
+      |> result.map(value.resolve_merges)
+  }
+}
+
+/// Like `parse_all` but with custom safety limits.
+pub fn parse_all_with_options(
+  input: String,
+  options: Options,
+) -> Result(List(Value), Error) {
+  case lexer.tokenize(input) {
+    Error(#(msg, pos)) -> Error(ParseError(msg, pos))
+    Ok(tokens) ->
+      parser.parse_all_with(tokens, options.alias_budget, options.max_depth)
+      |> result.map(list.map(_, value.resolve_merges))
   }
 }
 

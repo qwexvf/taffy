@@ -19,8 +19,23 @@ fn new(tokens: List(Token)) -> Parser {
   types.new(tokens)
 }
 
+fn with_limits(parser: Parser, alias_budget: Int, max_depth: Int) -> Parser {
+  Parser(..parser, alias_budget: alias_budget, max_depth: max_depth)
+}
+
 pub fn parse(tokens: List(Token)) -> Result(YamlValue, ParseError) {
-  let parser = new(tokens)
+  parse_from(new(tokens))
+}
+
+pub fn parse_with(
+  tokens: List(Token),
+  alias_budget: Int,
+  max_depth: Int,
+) -> Result(YamlValue, ParseError) {
+  parse_from(with_limits(new(tokens), alias_budget, max_depth))
+}
+
+fn parse_from(parser: Parser) -> Result(YamlValue, ParseError) {
   let parser = skip_newlines_and_comments(parser)
 
   let parser = case current(parser) {
@@ -43,7 +58,18 @@ pub fn parse(tokens: List(Token)) -> Result(YamlValue, ParseError) {
 }
 
 pub fn parse_all(tokens: List(Token)) -> Result(List(YamlValue), ParseError) {
-  let parser = new(tokens)
+  parse_all_from(new(tokens))
+}
+
+pub fn parse_all_with(
+  tokens: List(Token),
+  alias_budget: Int,
+  max_depth: Int,
+) -> Result(List(YamlValue), ParseError) {
+  parse_all_from(with_limits(new(tokens), alias_budget, max_depth))
+}
+
+fn parse_all_from(parser: Parser) -> Result(List(YamlValue), ParseError) {
   use parser <- result.try(consume_directives(parser))
   parse_documents(parser, [])
 }

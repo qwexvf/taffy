@@ -23,3 +23,20 @@ jobs:
       - run: gleam deps download
       - run: gleam test
       - run: gleam format --check src test
+
+  build-js:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: true
+      - uses: erlef/setup-beam@v1
+        with:
+          otp-version: "28"
+          gleam-version: "1.15.2"
+          rebar3-version: "3"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - run: gleam deps download
+      - run: gleam build --target javascript

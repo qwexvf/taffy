@@ -6,6 +6,32 @@ All notable changes to taffy will be documented here. Format follows
 API of `taffy`, `taffy/value`, or `taffy/native` will bump the major
 version.
 
+## [1.1.0] — 2026-05-16
+
+### Added
+- `taffy.Options`, `default_options()`, `parse_with_options/2`, and
+  `parse_all_with_options/2` for per-call `alias_budget` / `max_depth`
+  overrides. Defaults unchanged (10M / 1024).
+- JavaScript-target shim for `taffy/native` (`src/taffy_ffi.mjs`). The
+  pure parser was already JS-compatible; `taffy/native` now also compiles
+  on JS, with calls returning an error since `fast_yaml` is Erlang-only.
+
+### Changed
+- `as_dict` is now first-wins on duplicate keys, matching `get` /
+  `get_path`. Previously collapsed last-wins, which contradicted the
+  other accessors.
+- `to_yaml` escapes C0 control characters (`\0 \a \b \v \f \r \e` and
+  `\x..` for the rest) and `DEL` (`\x7f`) inside double-quoted strings,
+  fixing round-tripping for values that contain them.
+
+### Performance
+- `value.check_no_duplicates` and merge-key `append_unique` now use
+  `gleam/set` for membership instead of `list.contains`, dropping the
+  per-mapping O(n²) scan. The merge-append no longer rebuilds the
+  accumulator with `list.append/2` per pair.
+- `escape_for_double_quote` is one codepoint-fold instead of four full
+  `string.replace` passes.
+
 ## [1.0.2] — 2026-05-06
 
 ### Performance

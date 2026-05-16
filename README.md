@@ -172,12 +172,21 @@ case taffy.parse(input) {
 `parse` rejects two classes of malicious input by default:
 
 - **Alias bombs** — chained `&a → *a` references whose expansion would
-  exceed 10M nodes (configurable per-parser internally).
+  exceed 10M nodes.
 - **Deep block nesting** — block sequences/mappings nested past 1024 levels.
 
 These let you accept YAML from untrusted sources (config uploads, API
 payloads) without booby-trapping memory. See `CHANGELOG.md` for known
 limits — pure-flow `[[[...]]]` nesting is not currently capped.
+
+Tighten or loosen the defaults with `parse_with_options`:
+
+```gleam
+let opts = taffy.Options(..taffy.default_options(), max_depth: 64)
+let assert Ok(val) = taffy.parse_with_options(input, opts)
+```
+
+`parse_all_with_options` is the multi-document equivalent.
 
 ## Development
 

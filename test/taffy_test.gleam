@@ -783,3 +783,71 @@ paths:
   taffy.get_path(val, ["openapi"])
   |> should.equal(Ok(value.String("3.1.0")))
 }
+
+// Security: alias-bomb defense — overlapping aliases that multiply the
+// resolved node count past the budget must be rejected, not OOM.
+pub fn alias_bomb_budget_test() {
+  let input = "a: &a [1, 2, 3]\nb: [*a, *a, *a, *a, *a, *a, *a, *a, *a, *a]\n"
+  let opts = taffy.Options(alias_budget: 5, max_depth: 1024)
+  taffy.parse_with_options(input, opts)
+  |> should.be_error
+}
+
+// Default budget still accepts realistic anchor reuse.
+pub fn alias_reuse_default_budget_test() {
+  let input = "a: &a [1, 2, 3]\nb: [*a, *a, *a]\n"
+  taffy.parse(input)
+  |> should.be_ok
+}
+
+// Security: deeply nested block must trip the depth cap, not stack-OOM.
+pub fn deep_block_depth_test() {
+  // Six nested mappings — should fail with max_depth=3.
+  let input = "a:\n  b:\n    c:\n      d:\n        e:\n          f: 1\n"
+  let opts = taffy.Options(alias_budget: 10_000_000, max_depth: 3)
+  taffy.parse_with_options(input, opts)
+  |> should.be_error
+}
+
+pub fn shallow_block_default_depth_test() {
+  let input = "a:\n  b:\n    c: 1\n"
+  taffy.parse(input)
+  |> should.be_ok
+}
+
+// Options API parity with `parse` on a normal document.
+pub fn parse_with_options_normal_doc_test() {
+  let input = "name: John\nage: 30\n"
+  taffy.parse_with_options(input, taffy.default_options())
+  |> should.equal(taffy.parse(input))
+}
+
+// `to_yaml` must escape control chars so the output stays valid YAML and
+// round-trips through `parse`.
+pub fn to_yaml_escapes_control_chars_test() {
+  let val =
+    value.Mapping([
+      #("nul", value.String("a\u{0000}b")),
+      #("bell", value.String("a\u{0007}b")),
+      #("esc", value.String("a\u{001b}b")),
+      #("del", value.String("a\u{007f}b")),
+    ])
+  let yaml = taffy.to_yaml(val)
+  let assert Ok(parsed) = taffy.parse(yaml)
+  parsed
+  |> should.equal(val)
+}
+
+// `as_dict` must agree with `get` on the first-wins collapse rule.
+pub fn as_dict_first_wins_test() {
+  let val =
+    value.Mapping([
+      #("k", value.Int(1)),
+      #("k", value.Int(2)),
+    ])
+  let assert Some(d) = taffy.as_dict(val)
+  dict.get(d, "k")
+  |> should.equal(Ok(value.Int(1)))
+  taffy.get(val, "k")
+  |> should.equal(Ok(value.Int(1)))
+}
