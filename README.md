@@ -32,7 +32,9 @@ let assert Ok(value) = native.parse(input)
 | | `taffy.parse` | `taffy/native.parse` |
 |---|---|---|
 | Target | Erlang + JS | Erlang only |
-| Speed (small / medium / large) | 10k / 550 / 150 ops/s | 37k / 3.7k / 385 ops/s |
+| Speed (small / medium / large) | 15k / 1.4k / 400 ops/s | 55k / 5.7k / 560 ops/s |
+
+Measured on Ryzen 7 PRO 7840U, OTP 28, single run via `gleam run -m benchmark`. Small = 5-key flat map, medium = ~80-line OpenAPI, large = ~2000-line spec. Treat as order-of-magnitude.
 
 ## Reference
 
