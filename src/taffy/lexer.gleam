@@ -81,27 +81,31 @@ fn back_up(lexer: Lexer) -> Lexer {
   Lexer(..lexer, pos: new_pos, col: lexer.col - 1, rest: rest)
 }
 
-/// On error, the second element is the grapheme position at which the lexer
+/// On error, the second element is the byte position at which the lexer
 /// gave up — surfaced through `ParseError.pos` so callers can pinpoint the
 /// failure rather than always reporting `pos: 0`.
-pub fn tokenize(input: String) -> Result(List(Token), #(String, Int)) {
+///
+/// On success, each token is paired with the byte offset in `input` where
+/// the lexer was positioned when it began producing that token.
+pub fn tokenize(input: String) -> Result(List(#(Token, Int)), #(String, Int)) {
   let lexer = new(input)
   case count_indent(lexer) {
     Error(e) -> Error(#(e, lexer.pos))
     Ok(#(0, lexer)) -> tokenize_all(lexer, [])
-    Ok(#(n, lexer)) -> tokenize_all(lexer, [Indent(n)])
+    Ok(#(n, lexer)) -> tokenize_all(lexer, [#(Indent(n), 0)])
   }
 }
 
 fn tokenize_all(
   lexer: Lexer,
-  acc: List(Token),
-) -> Result(List(Token), #(String, Int)) {
+  acc: List(#(Token, Int)),
+) -> Result(List(#(Token, Int)), #(String, Int)) {
+  let start_pos = lexer.pos
   case next_token(lexer) {
     Ok(#(token, new_lexer)) -> {
       case token {
-        Eof -> Ok(list.reverse([Eof, ..acc]))
-        _ -> tokenize_all(new_lexer, [token, ..acc])
+        Eof -> Ok(list.reverse([#(Eof, start_pos), ..acc]))
+        _ -> tokenize_all(new_lexer, [#(token, start_pos), ..acc])
       }
     }
     Error(e) -> Error(#(e, lexer.pos))

@@ -60,8 +60,8 @@ pub fn default_options() -> Options {
   )
 }
 
-/// Compute `#(line, column)` (both 1-indexed) for a grapheme position
-/// inside `input`. Out-of-range positions clamp to the last line/column.
+/// Compute `#(line, column)` (both 1-indexed) for the byte position
+/// `pos` inside `input`. Out-of-range positions clamp to the last line/column.
 /// Useful for turning `error.pos` into a user-facing location:
 ///
 /// ```gleam
@@ -93,7 +93,8 @@ fn error_location_loop(
 }
 
 /// Parse a single YAML document. For multi-document streams use `parse_all`.
-/// On error the position points at the grapheme where parsing gave up.
+/// On error the position is the byte offset where parsing gave up; feed it
+/// through `error_location` to recover `#(line, column)`.
 /// `<<` merge keys are resolved automatically. Duplicate mapping keys are
 /// allowed (with first-wins access) — the YAML 1.2 spec mandates uniqueness
 /// but the official test suite expects parsers to accept them; use

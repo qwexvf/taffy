@@ -7,20 +7,25 @@ import taffy/parser/types.{type Parser, Parser}
 
 pub fn current(parser: Parser) -> Option(lexer.Token) {
   case parser.tokens {
-    [first, ..] -> Some(first)
+    [#(first, _), ..] -> Some(first)
     [] -> None
   }
 }
 
 pub fn advance(parser: Parser) -> Parser {
   case parser.tokens {
-    [first, ..rest] ->
+    [first, ..rest] -> {
+      let new_pos = case rest {
+        [#(_, p), ..] -> p
+        [] -> parser.pos
+      }
       Parser(
         ..parser,
         tokens: rest,
         consumed: [first, ..parser.consumed],
-        pos: parser.pos + 1,
+        pos: new_pos,
       )
+    }
     [] -> parser
   }
 }
@@ -29,12 +34,12 @@ pub fn advance(parser: Parser) -> Parser {
 /// has been consumed.
 pub fn backtrack(parser: Parser) -> Parser {
   case parser.consumed {
-    [last, ..rest] ->
+    [#(_, p) as last, ..rest] ->
       Parser(
         ..parser,
         tokens: [last, ..parser.tokens],
         consumed: rest,
-        pos: parser.pos - 1,
+        pos: p,
       )
     [] -> parser
   }

@@ -78,17 +78,20 @@ fn parse_block_sequence_items_col(
             Some(_) -> seq_col
             None -> Some(n)
           }
-          let parser = advance(parser)
-          case current(parser) {
+          let after_indent = advance(parser)
+          case current(after_indent) {
             Some(lexer.Dash) ->
               parse_sequence_item_col(
-                parser,
+                after_indent,
                 min_indent,
                 n + 1,
                 new_col,
                 acc,
                 parse_value_fn,
               )
+            // The Indent didn't introduce another sequence item. Put it back
+            // so the enclosing collection can decide whether the next line
+            // is a sibling key/dash or terminates its own block.
             _ -> Ok(#(value.Sequence(list.reverse(acc)), parser))
           }
         }

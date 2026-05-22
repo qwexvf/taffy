@@ -15,7 +15,7 @@ import taffy/parser/scalar
 import taffy/parser/types.{type ParseError, type Parser, ParseError, Parser}
 import taffy/value.{type YamlValue}
 
-fn new(tokens: List(Token)) -> Parser {
+fn new(tokens: List(#(Token, Int))) -> Parser {
   types.new(tokens)
 }
 
@@ -23,12 +23,12 @@ fn with_limits(parser: Parser, alias_budget: Int, max_depth: Int) -> Parser {
   Parser(..parser, alias_budget: alias_budget, max_depth: max_depth)
 }
 
-pub fn parse(tokens: List(Token)) -> Result(YamlValue, ParseError) {
+pub fn parse(tokens: List(#(Token, Int))) -> Result(YamlValue, ParseError) {
   parse_from(new(tokens))
 }
 
 pub fn parse_with(
-  tokens: List(Token),
+  tokens: List(#(Token, Int)),
   alias_budget: Int,
   max_depth: Int,
 ) -> Result(YamlValue, ParseError) {
@@ -57,12 +57,14 @@ fn parse_from(parser: Parser) -> Result(YamlValue, ParseError) {
   }
 }
 
-pub fn parse_all(tokens: List(Token)) -> Result(List(YamlValue), ParseError) {
+pub fn parse_all(
+  tokens: List(#(Token, Int)),
+) -> Result(List(YamlValue), ParseError) {
   parse_all_from(new(tokens))
 }
 
 pub fn parse_all_with(
-  tokens: List(Token),
+  tokens: List(#(Token, Int)),
   alias_budget: Int,
   max_depth: Int,
 ) -> Result(List(YamlValue), ParseError) {
@@ -676,9 +678,7 @@ fn parse_indented_value(
 
 fn is_sequence_dash(parser: Parser, n: Int) -> Bool {
   case parser.seq_entry_indent {
-    option.Some(entry_indent) if n > entry_indent && n == 0 -> True
-    option.Some(entry_indent) if n == entry_indent -> True
-    option.Some(_) -> False
+    option.Some(entry_indent) -> n == entry_indent
     option.None -> True
   }
 }

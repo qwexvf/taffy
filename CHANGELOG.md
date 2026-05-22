@@ -6,6 +6,26 @@ All notable changes to taffy will be documented here. Format follows
 API of `taffy`, `taffy/value`, or `taffy/native` will bump the major
 version.
 
+## [1.1.1] — 2026-05-22
+
+### Fixed
+- `error_location` now reports the correct line and column for parser
+  errors. `parser.pos` was a token index but `error_location` interpreted
+  it as a byte offset, so the reported line drifted far from the real one
+  on larger documents (e.g. line 237 instead of line 1993 on a 2000-line
+  OpenAPI spec). Byte positions are now threaded through the token
+  stream end to end.
+- Compact block sequences (dash at the parent key's column) no longer
+  swallow the following sibling key's `Indent` token. Previously a block
+  mapping that contained `key:\n- item\nnext_key: ...` closed itself
+  after the sequence and the parser reported `Unexpected trailing
+  content: indentation` against the trailing siblings. The OpenADR 3.1
+  spec and similarly-styled OpenAPI YAML now parse end to end.
+
+### Internal
+- Dropped an unreachable arm of `is_sequence_dash` (`seq_entry_indent` is
+  only ever set to `Some(0)` or `None`, never negative).
+
 ## [1.1.0] — 2026-05-16
 
 ### Added

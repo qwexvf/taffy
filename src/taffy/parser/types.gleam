@@ -14,8 +14,8 @@ import taffy/value.{type YamlValue}
 ///   deeply nested `[[[[...]]]]` payloads that would otherwise OOM.
 pub type Parser {
   Parser(
-    tokens: List(Token),
-    consumed: List(Token),
+    tokens: List(#(Token, Int)),
+    consumed: List(#(Token, Int)),
     pos: Int,
     anchors: Dict(String, YamlValue),
     seq_entry_indent: Option(Int),
@@ -41,11 +41,15 @@ pub const default_alias_budget: Int = 10_000_000
 /// Default maximum recursive value-parsing depth.
 pub const default_max_depth: Int = 1024
 
-pub fn new(tokens: List(Token)) -> Parser {
+pub fn new(tokens: List(#(Token, Int))) -> Parser {
+  let initial_pos = case tokens {
+    [#(_, p), ..] -> p
+    [] -> 0
+  }
   Parser(
     tokens: tokens,
     consumed: [],
-    pos: 0,
+    pos: initial_pos,
     anchors: dict.new(),
     seq_entry_indent: None,
     in_inline_value: False,
