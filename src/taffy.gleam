@@ -24,6 +24,8 @@
 //// - `validate_unique_keys` — opt-in YAML 1.2 strict duplicate-key check
 
 import gleam/dict.{type Dict}
+import gleam/dynamic
+import gleam/dynamic/decode
 import gleam/float
 import gleam/int
 import gleam/json.{type Json}
@@ -33,7 +35,7 @@ import gleam/result
 import gleam/string
 import taffy/lexer
 import taffy/parser
-import taffy/parser/types.{type ParseError, ParseError}
+import taffy/parser/types.{type ParseError}
 import taffy/value.{type YamlValue}
 
 pub type Value =
@@ -41,6 +43,11 @@ pub type Value =
 
 pub type Error =
   ParseError
+
+pub type YamlDecodeError {
+  DecodeErrors(List(decode.DecodeError))
+  ParseError(ParseError)
+}
 
 /// Per-parse safety knobs. Construct via `default_options()` and override
 /// fields, e.g. `Options(..taffy.default_options(), max_depth: 64)`.
@@ -101,7 +108,7 @@ fn error_location_loop(
 /// `validate_unique_keys` to enforce strict uniqueness yourself.
 pub fn parse(input: String) -> Result(Value, Error) {
   case lexer.tokenize(input) {
-    Error(#(msg, pos)) -> Error(ParseError(msg, pos))
+    Error(#(msg, pos)) -> Error(types.ParseError(msg, pos))
     Ok(tokens) -> parser.parse(tokens) |> result.map(value.resolve_merges)
   }
 }
@@ -110,7 +117,7 @@ pub fn parse(input: String) -> Result(Value, Error) {
 /// Same merge-key + duplicate semantics as `parse`.
 pub fn parse_all(input: String) -> Result(List(Value), Error) {
   case lexer.tokenize(input) {
-    Error(#(msg, pos)) -> Error(ParseError(msg, pos))
+    Error(#(msg, pos)) -> Error(types.ParseError(msg, pos))
     Ok(tokens) ->
       parser.parse_all(tokens) |> result.map(list.map(_, value.resolve_merges))
   }
@@ -123,7 +130,7 @@ pub fn parse_with_options(
   options: Options,
 ) -> Result(Value, Error) {
   case lexer.tokenize(input) {
-    Error(#(msg, pos)) -> Error(ParseError(msg, pos))
+    Error(#(msg, pos)) -> Error(types.ParseError(msg, pos))
     Ok(tokens) ->
       parser.parse_with(tokens, options.alias_budget, options.max_depth)
       |> result.map(value.resolve_merges)
@@ -136,7 +143,7 @@ pub fn parse_all_with_options(
   options: Options,
 ) -> Result(List(Value), Error) {
   case lexer.tokenize(input) {
-    Error(#(msg, pos)) -> Error(ParseError(msg, pos))
+    Error(#(msg, pos)) -> Error(types.ParseError(msg, pos))
     Ok(tokens) ->
       parser.parse_all_with(tokens, options.alias_budget, options.max_depth)
       |> result.map(list.map(_, value.resolve_merges))
@@ -149,7 +156,7 @@ pub fn parse_all_with_options(
 pub fn validate_unique_keys(val: Value) -> Result(Value, Error) {
   case value.check_no_duplicates(val) {
     Ok(Nil) -> Ok(val)
-    Error(key) -> Error(ParseError("Duplicate mapping key: " <> key, 0))
+    Error(key) -> Error(types.ParseError("Duplicate mapping key: " <> key, 0))
   }
 }
 
@@ -271,4 +278,36 @@ pub fn to_json(val: Value) -> Json {
 /// Convenience wrapper around `to_json` + `json.to_string`.
 pub fn to_json_string(val: Value) -> String {
   to_json(val) |> json.to_string
+}
+
+/// Decodes a Yaml into a type `t` given its decoder.
+/// Works similarly to `json.parse` from the `gleam_json` library.
+pub fn decode(
+  from yaml: String,
+  using decoder: decode.Decoder(t),
+) -> Result(t, YamlDecodeError) {
+  use yaml_value <- result.try(parse(yaml) |> result.map_error(ParseError))
+  let dynamic_value = yaml_to_dynamic(yaml_value)
+  decode.run(dynamic_value, decoder) |> result.map_error(DecodeErrors)
+}
+
+fn yaml_to_dynamic(yaml: Value) -> dynamic.Dynamic {
+  case yaml {
+    value.Null -> dynamic.nil()
+    value.Bool(value) -> dynamic.bool(value)
+    value.Int(value) -> dynamic.int(value)
+    value.Float(value) -> dynamic.float(value)
+    value.String(value) -> dynamic.string(value)
+    value.Sequence(value) -> list.map(value, yaml_to_dynamic) |> dynamic.list
+    value.Mapping(value) ->
+      list.map(value, pair_to_dynamics) |> dynamic.properties
+  }
+}
+
+fn pair_to_dynamics(
+  value: #(String, Value),
+) -> #(dynamic.Dynamic, dynamic.Dynamic) {
+  let first = dynamic.string(value.0)
+  let second = yaml_to_dynamic(value.1)
+  #(first, second)
 }
