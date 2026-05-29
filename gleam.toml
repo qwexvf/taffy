@@ -19,6 +19,7 @@ internal_modules = [
   "taffy/parser/helpers",
   "taffy/parser/scalar",
   "taffy/parser/types",
+  "taffy/decoder",
 ]
 
 [dependencies]

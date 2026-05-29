@@ -1,4 +1,3 @@
-import gleam/dict.{type Dict}
 import gleam/dynamic/decode
 import gleam/json
 import taffy

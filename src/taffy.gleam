@@ -24,7 +24,6 @@
 //// - `validate_unique_keys` — opt-in YAML 1.2 strict duplicate-key check
 
 import gleam/dict.{type Dict}
-import gleam/dynamic
 import gleam/dynamic/decode
 import gleam/float
 import gleam/int
@@ -33,6 +32,7 @@ import gleam/list
 import gleam/option.{type Option}
 import gleam/result
 import gleam/string
+import taffy/decoder
 import taffy/lexer
 import taffy/parser
 import taffy/parser/types.{type ParseError}
@@ -287,27 +287,6 @@ pub fn decode(
   using decoder: decode.Decoder(t),
 ) -> Result(t, YamlDecodeError) {
   use yaml_value <- result.try(parse(yaml) |> result.map_error(ParseError))
-  let dynamic_value = yaml_to_dynamic(yaml_value)
+  let dynamic_value = decoder.yaml_to_dynamic(yaml_value)
   decode.run(dynamic_value, decoder) |> result.map_error(DecodeErrors)
-}
-
-fn yaml_to_dynamic(yaml: Value) -> dynamic.Dynamic {
-  case yaml {
-    value.Null -> dynamic.nil()
-    value.Bool(value) -> dynamic.bool(value)
-    value.Int(value) -> dynamic.int(value)
-    value.Float(value) -> dynamic.float(value)
-    value.String(value) -> dynamic.string(value)
-    value.Sequence(value) -> list.map(value, yaml_to_dynamic) |> dynamic.list
-    value.Mapping(value) ->
-      list.map(value, pair_to_dynamics) |> dynamic.properties
-  }
-}
-
-fn pair_to_dynamics(
-  value: #(String, Value),
-) -> #(dynamic.Dynamic, dynamic.Dynamic) {
-  let first = dynamic.string(value.0)
-  let second = yaml_to_dynamic(value.1)
-  #(first, second)
 }
