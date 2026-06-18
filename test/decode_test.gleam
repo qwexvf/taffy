@@ -30,7 +30,7 @@ type DecodeTestSubType {
 pub fn compare_with_json_test() {
   // yaml string -> yaml -> json string -> decoded
   let assert Ok(yaml) = taffy.parse(yaml_to_test)
-  let json_string = echo taffy.to_json_string(yaml)
+  let json_string = taffy.to_json_string(yaml)
   let assert Ok(json_decoded) =
     json.parse(json_string, decode_test_type_decoder())
 
