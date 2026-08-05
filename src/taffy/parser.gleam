@@ -322,7 +322,8 @@ fn parse_value_dispatch(
   min_indent: Int,
 ) -> Result(#(YamlValue, Parser), ParseError) {
   case current(parser) {
-    Some(lexer.Comment(_)) -> parse_value(advance(parser), min_indent)
+    Some(lexer.Comment(_)) ->
+      parse_value(skip_comment_blank_lines(parser, min_indent), min_indent)
     Some(lexer.Newline) -> parse_value_after_newline(parser, min_indent)
     None
     | Some(lexer.Eof)
@@ -368,6 +369,33 @@ fn parse_value_dispatch(
         "Unexpected token: " <> token_for_error(token),
         parser.pos,
       ))
+  }
+}
+
+// A comment line inside a block value may be followed by blank lines before
+// the value's own content resumes. The blank lines lex as `Newline`, which on
+// its own ends the value (`parse_value_after_newline`), so `key:` followed by
+// an indented comment, a blank line, then indented content used to parse as
+// Null and leave the content as trailing garbage. Drop those newlines when
+// what follows is still indented into this value; anything else (column-0
+// content, EOF) keeps terminating.
+fn skip_comment_blank_lines(parser: Parser, min_indent: Int) -> Parser {
+  let after_comment = advance(parser)
+  case current(after_comment) {
+    Some(lexer.Newline) ->
+      case resume_indent(after_comment, min_indent) {
+        Some(resumed) -> resumed
+        None -> after_comment
+      }
+    _ -> after_comment
+  }
+}
+
+fn resume_indent(parser: Parser, min_indent: Int) -> option.Option(Parser) {
+  case current(parser) {
+    Some(lexer.Newline) -> resume_indent(advance(parser), min_indent)
+    Some(lexer.Indent(n)) if n >= min_indent -> Some(parser)
+    _ -> None
   }
 }
 

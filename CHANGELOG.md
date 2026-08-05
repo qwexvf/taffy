@@ -6,6 +6,18 @@ All notable changes to taffy will be documented here. Format follows
 API of `taffy`, `taffy/value`, or `taffy/native` will bump the major
 version.
 
+## [1.1.2] — 2026-08-05
+
+### Fixed
+- An indented comment followed by a blank line no longer fails to parse.
+  The blank line lexes as a `Newline`, which on its own ends a block value,
+  so `components:\n  # header\n\n  schemas: ...` parsed `components` as
+  null and reported `Unexpected trailing content: indentation` against the
+  rest of the document. Blank lines after a comment are now skipped when
+  the following line is still indented into the value; dedented content and
+  end of input keep terminating it, so `a: # c` followed by a blank line and
+  a sibling key still yields a null value.
+
 ## [1.1.1] — 2026-05-22
 
 ### Fixed
