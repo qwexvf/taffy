@@ -207,6 +207,51 @@ age: 30"
   taffy.get(val, "age") |> should.equal(Ok(value.Int(30)))
 }
 
+pub fn indented_comment_then_blank_line_test() {
+  let input =
+    "components:
+  # section header
+
+  schemas:
+    S: 1
+"
+
+  let assert Ok(val) = taffy.parse(input)
+  let assert Ok(components) = taffy.get(val, "components")
+  let assert Ok(schemas) = taffy.get(components, "schemas")
+  taffy.get(schemas, "S") |> should.equal(Ok(value.Int(1)))
+}
+
+pub fn indented_comment_then_blank_line_before_sequence_test() {
+  let input =
+    "a:
+  # c
+
+  - 1
+  - 2
+"
+
+  let assert Ok(val) = taffy.parse(input)
+  taffy.get(val, "a")
+  |> should.equal(Ok(value.Sequence([value.Int(1), value.Int(2)])))
+}
+
+// A blank line after a comment must still end the value when what follows is
+// dedented, rather than folding the sibling key into it.
+pub fn comment_then_blank_line_keeps_null_value_test() {
+  let input =
+    "top:
+  a: # c
+
+  b: 1
+"
+
+  let assert Ok(val) = taffy.parse(input)
+  let assert Ok(top) = taffy.get(val, "top")
+  taffy.get(top, "a") |> should.equal(Ok(value.Null))
+  taffy.get(top, "b") |> should.equal(Ok(value.Int(1)))
+}
+
 // Document markers tests
 
 pub fn parse_with_document_start_test() {
