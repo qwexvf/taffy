@@ -35,12 +35,7 @@ pub fn advance(parser: Parser) -> Parser {
 pub fn backtrack(parser: Parser) -> Parser {
   case parser.consumed {
     [#(_, p) as last, ..rest] ->
-      Parser(
-        ..parser,
-        tokens: [last, ..parser.tokens],
-        consumed: rest,
-        pos: p,
-      )
+      Parser(..parser, tokens: [last, ..parser.tokens], consumed: rest, pos: p)
     [] -> parser
   }
 }
