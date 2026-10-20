@@ -21,7 +21,7 @@ pub fn main() {
 }
 ```
 
-Native backend — same API, faster:
+The native backend has the same API and is faster:
 
 ```gleam
 import taffy/native
