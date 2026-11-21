@@ -241,7 +241,11 @@ fn lex_dash_indicator(lexer: Lexer) -> Result(#(Token, Lexer), String) {
   case peek(lexer) {
     Some(" ") | Some("\n") | Some("\r") | Some("\t") | None ->
       Ok(#(Dash, lexer))
-    Some(",") | Some("]") | Some("}") | Some("[") | Some("{")
+    Some(",")
+      | Some("]")
+      | Some("}")
+      | Some("[")
+      | Some("{")
       if lexer.flow_level > 0
     -> Error("Invalid use of dash indicator in flow context")
     _ -> read_plain_scalar(back_up(lexer))
@@ -454,7 +458,10 @@ fn count_indent(lexer: Lexer) -> Result(#(Int, Lexer), String) {
   count_indent_loop(lexer, 0)
 }
 
-fn count_indent_loop(lexer: Lexer, count: Int) -> Result(#(Int, Lexer), String) {
+fn count_indent_loop(
+  lexer: Lexer,
+  count: Int,
+) -> Result(#(Int, Lexer), String) {
   case lexer.rest {
     <<" ", more:bits>> ->
       count_indent_loop(consume(lexer, bytes: 1, rest: more), count + 1)
@@ -1120,14 +1127,58 @@ fn read_hex_digits(
 
 fn is_letter(c: String) -> Bool {
   case c {
-    "a" | "b" | "c" | "d" | "e" | "f" | "g" | "h" | "i" | "j" | "k" | "l" | "m" ->
-      True
-    "n" | "o" | "p" | "q" | "r" | "s" | "t" | "u" | "v" | "w" | "x" | "y" | "z" ->
-      True
-    "A" | "B" | "C" | "D" | "E" | "F" | "G" | "H" | "I" | "J" | "K" | "L" | "M" ->
-      True
-    "N" | "O" | "P" | "Q" | "R" | "S" | "T" | "U" | "V" | "W" | "X" | "Y" | "Z" ->
-      True
+    "a"
+    | "b"
+    | "c"
+    | "d"
+    | "e"
+    | "f"
+    | "g"
+    | "h"
+    | "i"
+    | "j"
+    | "k"
+    | "l"
+    | "m" -> True
+    "n"
+    | "o"
+    | "p"
+    | "q"
+    | "r"
+    | "s"
+    | "t"
+    | "u"
+    | "v"
+    | "w"
+    | "x"
+    | "y"
+    | "z" -> True
+    "A"
+    | "B"
+    | "C"
+    | "D"
+    | "E"
+    | "F"
+    | "G"
+    | "H"
+    | "I"
+    | "J"
+    | "K"
+    | "L"
+    | "M" -> True
+    "N"
+    | "O"
+    | "P"
+    | "Q"
+    | "R"
+    | "S"
+    | "T"
+    | "U"
+    | "V"
+    | "W"
+    | "X"
+    | "Y"
+    | "Z" -> True
     _ -> False
   }
 }
@@ -1691,7 +1742,11 @@ fn find_min_block_indent_loop(
   }
 }
 
-fn skip_line_and_continue(lexer: Lexer, current_min: Int, explicit: Int) -> Int {
+fn skip_line_and_continue(
+  lexer: Lexer,
+  current_min: Int,
+  explicit: Int,
+) -> Int {
   let #(_, after_line) = read_until_newline(lexer)
   case peek(after_line) {
     Some("\n") ->

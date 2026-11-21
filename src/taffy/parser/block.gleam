@@ -1013,7 +1013,10 @@ fn handle_indented_explicit_key_value(
   }
 }
 
-fn collect_explicit_key_value(parser: Parser, acc: String) -> #(String, Parser) {
+fn collect_explicit_key_value(
+  parser: Parser,
+  acc: String,
+) -> #(String, Parser) {
   case current(parser) {
     Some(lexer.Plain(s)) ->
       collect_explicit_key_value(advance(parser), acc <> " " <> s)

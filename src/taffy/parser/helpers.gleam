@@ -59,7 +59,9 @@ pub fn flow_whitespace_has_comment(parser: Parser) -> Bool {
   }
 }
 
-pub fn skip_flow_whitespace(parser: Parser) -> Result(Parser, types.ParseError) {
+pub fn skip_flow_whitespace(
+  parser: Parser,
+) -> Result(Parser, types.ParseError) {
   case current(parser) {
     Some(lexer.Newline) -> {
       let parser = Parser(..parser, flow_multiline: True)

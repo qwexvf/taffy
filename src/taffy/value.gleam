@@ -341,7 +341,9 @@ pub fn resolve_merges(value: YamlValue) -> YamlValue {
   }
 }
 
-fn merge_pairs(pairs: List(#(String, YamlValue))) -> List(#(String, YamlValue)) {
+fn merge_pairs(
+  pairs: List(#(String, YamlValue)),
+) -> List(#(String, YamlValue)) {
   let #(own, merged_sources) =
     list.fold(pairs, #([], []), fn(acc, p) {
       let #(own, sources) = acc

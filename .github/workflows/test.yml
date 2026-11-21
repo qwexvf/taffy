@@ -17,7 +17,7 @@ jobs:
       - uses: erlef/setup-beam@v1
         with:
           otp-version: "28"
-          gleam-version: "1.15.2"
+          gleam-version: "1.19.2"
           rebar3-version: "3"
           # elixir-version: "1"
       - run: gleam deps download
@@ -33,7 +33,7 @@ jobs:
       - uses: erlef/setup-beam@v1
         with:
           otp-version: "28"
-          gleam-version: "1.15.2"
+          gleam-version: "1.19.2"
           rebar3-version: "3"
       - uses: actions/setup-node@v4
         with:

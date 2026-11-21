@@ -2,7 +2,8 @@ import gleam/dynamic/decode
 import gleam/json
 import taffy
 
-const yaml_to_test = "field1: 9
+const yaml_to_test =
+  "field1: 9
 field2: Hello, Lucy!
 field3: true
 field4: 4.5
