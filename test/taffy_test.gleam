@@ -896,3 +896,51 @@ pub fn as_dict_first_wins_test() {
   taffy.get(val, "k")
   |> should.equal(Ok(value.Int(1)))
 }
+
+// Shapes from real OpenAPI specs (Asana, OpenAI, Petstore) that parsed wrong.
+// Expected values are what PyYAML reads from the same text.
+
+fn json_of(yaml: String) -> String {
+  let assert Ok(v) = taffy.parse(yaml)
+  taffy.to_json_string(v)
+}
+
+pub fn folded_scalar_then_sibling_key_test() {
+  json_of("i:\n  d: >-\n    x\n  t: Asana\n  s: h\n")
+  |> should.equal("{\"i\":{\"d\":\"x\",\"t\":\"Asana\",\"s\":\"h\"}}")
+  json_of("i:\n  d: >\n    x\n  t: A\nz: 1\n")
+  |> should.equal("{\"i\":{\"d\":\"x\\n\",\"t\":\"A\"},\"z\":1}")
+}
+
+pub fn empty_block_scalar_before_sibling_test() {
+  json_of("a:\n  b: |\n  c: 1\n")
+  |> should.equal("{\"a\":{\"b\":\"\",\"c\":1}}")
+  json_of("a:\n  b: >\n\n  c: 1\nd: 2\n")
+  |> should.equal("{\"a\":{\"b\":\"\",\"c\":1},\"d\":2}")
+  // `|+` keeps the blank line even though the block ends at a dedent.
+  json_of("a:\n  - b: |+\n      \n  - c\n")
+  |> should.equal("{\"a\":[{\"b\":\"\\n\"},\"c\"]}")
+}
+
+pub fn continuation_line_starting_with_bracket_test() {
+  json_of("d: a the\n  [Live x\n  guide](u) z\ne: 1\n")
+  |> should.equal("{\"d\":\"a the [Live x guide](u) z\",\"e\":1}")
+  json_of("d: a\n  [ b ] c\n")
+  |> should.equal("{\"d\":\"a [ b ] c\"}")
+  json_of("d: a\n  {b} c\nf: 2\n")
+  |> should.equal("{\"d\":\"a {b} c\",\"f\":2}")
+}
+
+pub fn comma_in_plain_scalar_keeps_spacing_test() {
+  json_of("d: Use tag1, tag2, tag3 for testing.\n")
+  |> should.equal("{\"d\":\"Use tag1, tag2, tag3 for testing.\"}")
+  json_of("d: a,b c\n")
+  |> should.equal("{\"d\":\"a,b c\"}")
+}
+
+pub fn comma_is_not_a_decimal_point_test() {
+  json_of("e: 521621,621373\n")
+  |> should.equal("{\"e\":\"521621,621373\"}")
+  taffy.parse("-2.5e3")
+  |> should.equal(Ok(value.Float(-2500.0)))
+}
