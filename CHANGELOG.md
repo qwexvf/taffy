@@ -6,7 +6,7 @@ All notable changes to taffy will be documented here. Format follows
 API of `taffy`, `taffy/value`, or `taffy/native` will bump the major
 version.
 
-## Unreleased
+## [1.1.3] — 2026-11-22
 
 ### Fixed
 
