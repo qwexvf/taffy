@@ -100,6 +100,9 @@ fn tokenize_all(
   lexer: Lexer,
   acc: List(#(Token, Int)),
 ) -> Result(List(#(Token, Int)), #(String, Int)) {
+  // The offset is where the token's text starts, after any spaces before it,
+  // so the parser can tell `[b]` from `[ b ]` by comparing offsets.
+  let lexer = skip_inline_blanks(lexer)
   let start_pos = lexer.pos
   case next_token(lexer) {
     Ok(#(token, new_lexer)) -> {
@@ -109,6 +112,14 @@ fn tokenize_all(
       }
     }
     Error(e) -> Error(#(e, lexer.pos))
+  }
+}
+
+fn skip_inline_blanks(lexer: Lexer) -> Lexer {
+  case lexer.rest {
+    <<" ", more:bits>> | <<"\t", more:bits>> ->
+      skip_inline_blanks(consume(lexer, bytes: 1, rest: more))
+    _ -> lexer
   }
 }
 
@@ -1386,13 +1397,16 @@ fn read_literal_content(
   chomping: Chomping,
   explicit_indent: Option(Int),
 ) -> Result(#(Token, Lexer), String) {
+  let header_indent = previous_line_indent(lexer)
   let #(leading_newlines, max_empty_indent, lexer) =
     count_leading_empty_lines(lexer, 0, 0)
-  case find_block_indent(lexer) {
+  case find_content_indent(lexer, header_indent) {
     Error(e) -> Error(e)
     Ok(NoContent(end_lexer)) -> {
+      // Kept at the end of input and before a less indented line; not
+      // before a document marker.
       let actual_trailing = case peek(end_lexer) {
-        None -> leading_newlines
+        None | Some("\n") | Some("\r") -> leading_newlines
         _ -> 0
       }
       let content = case chomping {
@@ -1400,7 +1414,7 @@ fn read_literal_content(
         Clip -> ""
         Keep -> string.repeat("\n", actual_trailing)
       }
-      Ok(#(Literal(content), lexer))
+      Ok(#(Literal(content), end_lexer))
     }
     Ok(FoundContent(detected_indent, lexer)) -> {
       case max_empty_indent > detected_indent && detected_indent > 0 {
@@ -1429,6 +1443,7 @@ fn read_folded_content(
   chomping: Chomping,
   explicit_indent: Option(Int),
 ) -> Result(#(Token, Lexer), String) {
+  let start = lexer
   let #(leading_newlines, max_empty_indent, lexer) =
     count_leading_empty_lines(lexer, 0, 0)
   let prefix = repeat_string("\n", leading_newlines, [])
@@ -1436,6 +1451,7 @@ fn read_folded_content(
     True -> FoldAfterBlank
     False -> FoldNormal
   }
+  let header_indent = previous_line_indent(start)
 
   case explicit_indent {
     Some(indent) -> {
@@ -1445,11 +1461,11 @@ fn read_folded_content(
       Ok(#(Folded(content), lexer))
     }
     None -> {
-      case find_block_indent(lexer) {
+      case find_content_indent(lexer, header_indent) {
         Error(e) -> Error(e)
         Ok(NoContent(end_lexer)) -> {
           let actual_trailing = case peek(end_lexer) {
-            None -> leading_newlines
+            None | Some("\n") | Some("\r") -> leading_newlines
             _ -> 0
           }
           let content = case chomping {
@@ -1457,7 +1473,7 @@ fn read_folded_content(
             Clip -> ""
             Keep -> string.repeat("\n", actual_trailing)
           }
-          Ok(#(Folded(content), lexer))
+          Ok(#(Folded(content), end_lexer))
         }
         Ok(FoundContent(block_indent, lexer)) -> {
           case max_empty_indent > block_indent && block_indent > 0 {
@@ -1509,6 +1525,49 @@ fn count_leading_empty_lines(
 type BlockIndentResult {
   FoundContent(indent: Int, lexer: Lexer)
   NoContent(lexer: Lexer)
+}
+
+/// `find_block_indent`, except that a line indented no deeper than the line
+/// holding the `|` or `>` is not content: the block scalar is empty and that
+/// line is the next key or item. Without this, `b: |` followed by a sibling
+/// `c: 1` read "c: 1" as the scalar's text. The header line's indentation is a
+/// lower bound for the parent node's, which is the true limit; it is enough to
+/// stop a sibling being swallowed.
+fn find_content_indent(
+  lexer: Lexer,
+  header_indent: Int,
+) -> Result(BlockIndentResult, String) {
+  case find_block_indent(lexer) {
+    Ok(FoundContent(indent, line_start))
+      if indent > 0 && indent <= header_indent
+    -> Ok(NoContent(back_up(line_start)))
+    other -> other
+  }
+}
+
+/// Spaces at the start of the line before the one `lexer` is at.
+fn previous_line_indent(lexer: Lexer) -> Int {
+  let line_end = lexer.pos - 1
+  let line_start = line_start_before(lexer.input, line_end)
+  count_spaces_at(lexer.input, line_start, 0)
+}
+
+fn line_start_before(input: BitArray, pos: Int) -> Int {
+  case pos <= 0 {
+    True -> 0
+    False ->
+      case bit_array.slice(input, pos - 1, 1) {
+        Ok(<<"\n">>) -> pos
+        _ -> line_start_before(input, pos - 1)
+      }
+  }
+}
+
+fn count_spaces_at(input: BitArray, pos: Int, n: Int) -> Int {
+  case bit_array.slice(input, pos, 1) {
+    Ok(<<" ">>) -> count_spaces_at(input, pos + 1, n + 1)
+    _ -> n
+  }
 }
 
 fn find_block_indent(lexer: Lexer) -> Result(BlockIndentResult, String) {
@@ -1851,9 +1910,10 @@ fn read_folded_lines(
             acc,
             state,
           )
-        False -> {
-          #(acc, lexer)
-        }
+        // Back up over the newline, as the literal reader does, so the next
+        // token sees the line break and its indentation. Without it a key
+        // after a nested `>` scalar was read at the parent's level.
+        False -> #(acc, back_up(lexer))
       }
     }
   }

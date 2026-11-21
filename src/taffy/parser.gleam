@@ -798,8 +798,9 @@ fn collect_plain_scalar_from_colon(parser: Parser) -> #(String, Parser) {
       #("," <> rest, parser)
     }
     Some(lexer.Plain(s)) -> {
+      let space = helpers.gap(parser)
       let #(rest, parser) = collect_plain_scalar_from_colon(advance(parser))
-      #(s <> rest, parser)
+      #(space <> s <> rest, parser)
     }
     _ -> #("", parser)
   }
@@ -811,11 +812,17 @@ fn collect_block_plain_key(parser: Parser, acc: String) -> #(String, Parser) {
     Some(lexer.BracketOpen) ->
       collect_block_plain_key(advance(parser), acc <> "[")
     Some(lexer.BracketClose) ->
-      collect_block_plain_key(advance(parser), acc <> "]")
+      collect_block_plain_key(
+        advance(parser),
+        acc <> helpers.gap(parser) <> "]",
+      )
     Some(lexer.BraceOpen) ->
       collect_block_plain_key(advance(parser), acc <> "{")
     Some(lexer.BraceClose) ->
-      collect_block_plain_key(advance(parser), acc <> "}")
+      collect_block_plain_key(
+        advance(parser),
+        acc <> helpers.gap(parser) <> "}",
+      )
     Some(lexer.Colon) -> {
       let after_colon = advance(parser)
       case current(after_colon) {
@@ -826,7 +833,8 @@ fn collect_block_plain_key(parser: Parser, acc: String) -> #(String, Parser) {
         _ -> #(acc, parser)
       }
     }
-    Some(lexer.Plain(s)) -> collect_block_plain_key(advance(parser), acc <> s)
+    Some(lexer.Plain(s)) ->
+      collect_block_plain_key(advance(parser), acc <> helpers.gap(parser) <> s)
     _ -> #(acc, parser)
   }
 }
@@ -843,12 +851,19 @@ fn append_continuation(acc: String, fragment: String) -> String {
 
 /// View a token as a fragment that can extend a plain scalar across a line
 /// break. `Plain(s)` and `Tag(s)` keep their text; `Anchor(s)` re-prepends
-/// `&`. Anything else returns `None`, signalling the scalar has ended.
+/// `&`. A bracket or brace is text in a block plain scalar, as it already is
+/// mid-line (`collect_block_plain_value`); a Markdown link wrapped onto a
+/// continuation line (`[Live prompting\n guide](url)`) starts with one.
+/// Anything else returns `None`, signalling the scalar has ended.
 fn token_as_scalar_fragment(token: lexer.Token) -> option.Option(String) {
   case token {
     lexer.Plain(s) -> Some(s)
     lexer.Tag(s) -> Some(s)
     lexer.Anchor(s) -> Some("&" <> s)
+    lexer.BracketOpen -> Some("[")
+    lexer.BracketClose -> Some("]")
+    lexer.BraceOpen -> Some("{")
+    lexer.BraceClose -> Some("}")
     _ -> None
   }
 }
@@ -864,15 +879,27 @@ fn collect_block_plain_value(
     Some(lexer.BracketOpen) ->
       collect_block_plain_value(advance(parser), acc <> "[", min_indent)
     Some(lexer.BracketClose) ->
-      collect_block_plain_value(advance(parser), acc <> "]", min_indent)
+      collect_block_plain_value(
+        advance(parser),
+        acc <> helpers.gap(parser) <> "]",
+        min_indent,
+      )
     Some(lexer.BraceOpen) ->
       collect_block_plain_value(advance(parser), acc <> "{", min_indent)
     Some(lexer.BraceClose) ->
-      collect_block_plain_value(advance(parser), acc <> "}", min_indent)
+      collect_block_plain_value(
+        advance(parser),
+        acc <> helpers.gap(parser) <> "}",
+        min_indent,
+      )
     Some(lexer.Colon) ->
       collect_block_plain_value(advance(parser), acc <> ":", min_indent)
     Some(lexer.Plain(s)) ->
-      collect_block_plain_value(advance(parser), acc <> " " <> s, min_indent)
+      collect_block_plain_value(
+        advance(parser),
+        acc <> helpers.gap(parser) <> s,
+        min_indent,
+      )
     Some(lexer.Tag(s)) ->
       collect_block_plain_value(advance(parser), acc <> " " <> s, min_indent)
     Some(lexer.Anchor(s)) ->

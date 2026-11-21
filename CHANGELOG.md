@@ -6,6 +6,26 @@ All notable changes to taffy will be documented here. Format follows
 API of `taffy`, `taffy/value`, or `taffy/native` will bump the major
 version.
 
+## Unreleased
+
+### Fixed
+
+Found by parsing the Asana, OpenAI and Swagger Petstore v3 OpenAPI specs and
+comparing with PyYAML.
+
+- A key after a nested folded block scalar (`>`, `>-`) was read at the parent
+  mapping's level, and a second such key failed to parse.
+- An empty block scalar (`b: |` followed by a sibling key) read the next line
+  as its content; with `|+` the blank lines before a dedent are now kept.
+- A plain scalar's continuation line starting with `[` or `{` failed to parse.
+- A comma in a plain scalar dropped the space after it: `tag1, tag2` read as
+  `tag1,tag2`.
+- A plain scalar like `521621,621373` was read as the float `521621.621373`,
+  because Erlang's float parsing accepts a comma; floats must now match YAML's
+  float syntax.
+- Token offsets point at the token's first character rather than the spaces
+  before it.
+
 ## [1.1.2] — 2026-08-05
 
 ### Fixed

@@ -827,10 +827,13 @@ fn collect_block_key(
   case current(parser) {
     Some(lexer.Comma) -> collect_block_key(advance(parser), acc <> ",")
     Some(lexer.BracketOpen) -> collect_block_key(advance(parser), acc <> "[")
-    Some(lexer.BracketClose) -> collect_block_key(advance(parser), acc <> "]")
+    Some(lexer.BracketClose) ->
+      collect_block_key(advance(parser), acc <> helpers.gap(parser) <> "]")
     Some(lexer.BraceOpen) -> collect_block_key(advance(parser), acc <> "{")
-    Some(lexer.BraceClose) -> collect_block_key(advance(parser), acc <> "}")
-    Some(lexer.Plain(s)) -> collect_block_key(advance(parser), acc <> s)
+    Some(lexer.BraceClose) ->
+      collect_block_key(advance(parser), acc <> helpers.gap(parser) <> "}")
+    Some(lexer.Plain(s)) ->
+      collect_block_key(advance(parser), acc <> helpers.gap(parser) <> s)
 
     Some(lexer.Colon) -> {
       let after_colon = advance(parser)

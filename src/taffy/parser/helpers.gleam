@@ -2,6 +2,7 @@
 
 import gleam/int
 import gleam/option.{type Option, None, Some}
+import gleam/string
 import taffy/lexer
 import taffy/parser/types.{type Parser, Parser}
 
@@ -207,5 +208,34 @@ pub fn token_for_error(token: lexer.Token) -> String {
     lexer.Comment(_) -> "comment"
     lexer.Eof -> "end of input"
     other -> token_to_string(other)
+  }
+}
+
+/// The text between the token just read and the current one: nothing when
+/// they touched in the source, else one space. A bracket that starts a
+/// continuation line is its own token, so `[Live\n  guide](url)` would
+/// otherwise read back as `[ Live guide] (url)`.
+pub fn gap(parser: Parser) -> String {
+  case parser.consumed, parser.tokens {
+    [#(previous, start), ..], [#(_, next), ..] ->
+      case token_length(previous) {
+        Ok(length) if start + length == next -> ""
+        _ -> " "
+      }
+    _, _ -> " "
+  }
+}
+
+/// How many bytes of source a token covers, for the ones whose text is known.
+fn token_length(token: lexer.Token) -> Result(Int, Nil) {
+  case token {
+    lexer.Plain(s) -> Ok(string.byte_size(s))
+    lexer.BracketOpen
+    | lexer.BracketClose
+    | lexer.BraceOpen
+    | lexer.BraceClose
+    | lexer.Colon
+    | lexer.Comma -> Ok(1)
+    _ -> Error(Nil)
   }
 }
